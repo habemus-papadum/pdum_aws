@@ -2,10 +2,14 @@
 
 [Full report](https://htmlpreview.github.io/?https://github.com/habemus-papadum/pdum_aws/blob/python-coverage-comment-action-data/htmlcov/index.html)
 
-| Name                         |    Stmts |     Miss |    Cover |   Missing |
-|----------------------------- | -------: | -------: | -------: | --------: |
-| src/pdum/aws/\_\_init\_\_.py |        2 |        0 |     100% |           |
-| **TOTAL**                    |    **2** |    **0** | **100%** |           |
+| Name                         |    Stmts |     Miss |   Cover |   Missing |
+|----------------------------- | -------: | -------: | ------: | --------: |
+| src/pdum/aws/\_\_init\_\_.py |        3 |        0 |    100% |           |
+| src/pdum/aws/cli.py          |      203 |       12 |     94% |110-111, 291-292, 302, 304, 373-377, 381 |
+| src/pdum/aws/core.py         |       11 |        0 |    100% |           |
+| src/pdum/aws/quotas.py       |      100 |        1 |     99% |       213 |
+| src/pdum/aws/secrets.py      |       63 |        0 |    100% |           |
+| **TOTAL**                    |  **380** |   **13** | **97%** |           |
 
 
 ## Setup coverage badge
