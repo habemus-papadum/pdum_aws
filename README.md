@@ -27,11 +27,111 @@ uv pip install habemus-papadum-aws
 
 ## Usage
 
+Nothing here hardcodes a profile, region, or account. Credentials come from
+`boto3`'s own resolution, so you pick an account the standard way:
+
+```bash
+AWS_PROFILE=my-account python -m my_script
+```
+
+### Identity
+
 ```python
 from pdum import aws
 
-print(aws.__version__)
+print(aws.whoami()["Account"])
+ssm = aws.client("ssm")
 ```
+
+### Secrets
+
+A `SecretStore` is a namespaced view of SSM Parameter Store. Reads check the
+environment first, so a shell export or test fixture overrides without touching
+AWS. The prefix is required — a shared default would let unrelated projects
+collide in one namespace.
+
+```python
+from pdum.aws.secrets import SecretStore
+
+store = SecretStore("/myapp/")
+store.put("STRIPE_KEY", "sk_live_...")
+store.get("STRIPE_KEY", required=True)
+store.names()
+```
+
+### Service quotas
+
+A fresh AWS account can launch almost nothing — typically 5 vCPUs of standard
+on-demand EC2 and zero of every accelerator family. These helpers report on that
+and request increases, returning data rather than printing so callers own
+presentation.
+
+```python
+from pdum.aws import quotas
+
+for status in quotas.report(quotas.EC2_VCPU_TARGETS, region="us-east-1"):
+    print(status.target.label, status.current, status.state)
+
+results = quotas.submit(quotas.EC2_VCPU_TARGETS, region="us-east-1")
+```
+
+`submit` is idempotent: quotas already satisfied, or already carrying an open
+request, are skipped rather than resubmitted. It stops cleanly when the account
+hits its undocumented cap of ~20 simultaneously open requests, so the workflow
+is submit, wait for cases to be decided, submit again.
+
+## Command line
+
+Installing the package provides `pdum-aws`. There is deliberately no `--profile`
+flag — pick an account the standard way, so this behaves like every other AWS
+tool on the box.
+
+```bash
+AWS_PROFILE=my-account pdum-aws whoami
+```
+
+### Secrets
+
+The prefix has no default. Pass `--prefix` or set `PDUM_SSM_PREFIX` once.
+
+```bash
+export PDUM_SSM_PREFIX=/myapp/
+
+pdum-aws secrets list                  # names only
+pdum-aws secrets list --long           # type, version, last modified
+pdum-aws secrets get API_KEY           # value alone, safe to pipe
+printf %s 'sk_live_...' | pdum-aws secrets set API_KEY -
+pdum-aws secrets rm API_KEY
+pdum-aws secrets import .secrets --dry-run
+pdum-aws secrets export
+```
+
+`set` reads stdin when the value is omitted or given as `-`; prefer that, since
+a value passed as an argument lands in your shell history. `import` refuses to
+push AWS bootstrap keys (`AWS_ACCESS_KEY_ID`, `AWS_PROFILE`, …) — storing the
+credentials you need in order to reach the store would be circular.
+
+### Quotas
+
+```bash
+pdum-aws quotas status  --region us-east-1 --region us-west-2
+pdum-aws quotas history --region us-east-1        # what AWS decided
+pdum-aws quotas request --region us-east-1 --dry-run
+pdum-aws quotas request --region us-east-1
+```
+
+`--region` is repeatable; omit it to use whatever the environment resolves.
+`quotas targets` prints the bundled EC2 plan as JSON so you can edit it and pass
+it back with `--targets`:
+
+```bash
+pdum-aws quotas targets > my-targets.json
+pdum-aws quotas request --targets my-targets.json
+```
+
+Do not infer a quota's value from its request status. AWS also raises limits on
+young accounts automatically, independently of any request — `quotas status`
+shows the applied value, which is the number that matters.
 
 ## Development
 

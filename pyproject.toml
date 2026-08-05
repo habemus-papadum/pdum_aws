@@ -18,7 +18,14 @@ authors = [
     { name = "Nehal Patel", email = "nehal@alum.mit.edu" }
 ]
 requires-python = ">=3.14"
-dependencies = []
+dependencies = [
+    "boto3>=1.35",
+    "rich>=13.7",
+    "typer>=0.15",
+]
+
+[project.scripts]
+pdum-aws = "pdum.aws.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/habemus-papadum/pdum_aws"
