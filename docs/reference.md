@@ -21,3 +21,21 @@
 ## pdum.aws.cli
 
 ::: pdum.aws.cli
+    options:
+      show_submodules: false
+
+## pdum.aws.cli.secrets
+
+::: pdum.aws.cli.secrets
+
+## pdum.aws.cli.quotas
+
+::: pdum.aws.cli.quotas
+
+## pdum.aws.cli.identity
+
+::: pdum.aws.cli.identity
+
+## pdum.aws.cli.output
+
+::: pdum.aws.cli.output

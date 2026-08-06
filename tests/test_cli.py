@@ -44,11 +44,10 @@ def _stable_console(monkeypatch):
       ``case-L…``. Setting ``COLUMNS`` here would be too late — rich reads it
       **once, when the Console is constructed**, which happens when
       :mod:`pdum.aws.cli` is imported. The width has to be pushed onto the live
-      Console objects instead.
+      Console object instead.
     """
     monkeypatch.delenv("PDUM_SSM_PREFIX", raising=False)
-    for console in (cli.console, cli.raw):
-        monkeypatch.setattr(console, "width", 200)
+    monkeypatch.setattr(cli.console, "width", 200)
 
 
 @pytest.fixture
@@ -86,7 +85,7 @@ class TestTopLevel:
 
     def test_whoami(self, monkeypatch):
         monkeypatch.setattr(
-            "pdum.aws.cli.aws.whoami",
+            "pdum.aws.whoami",
             lambda *a, **k: {"Account": "123456789012", "Arn": "arn:aws:iam::123456789012:root"},
         )
         result = runner.invoke(app, ["whoami"])

@@ -133,6 +133,60 @@ Do not infer a quota's value from its request status. AWS also raises limits on
 young accounts automatically, independently of any request — `quotas status`
 shows the applied value, which is the number that matters.
 
+## Embedding these commands in your own CLI
+
+Each group is produced by a factory, so another application can mount the same
+commands under its own name — carrying its own defaults, rendering through its
+own console. That is how you give an app a `secrets` subcommand without asking
+its users to type a prefix:
+
+```python
+import typer
+from rich.console import Console
+
+from pdum.aws.cli import add_whoami, aws_errors, build_quotas_app, build_secrets_app
+
+console = Console()
+
+app = typer.Typer(help="acme — the whole product.", no_args_is_help=True)
+add_whoami(app, console=console)
+app.add_typer(
+    build_secrets_app(console=console, default_prefix="/acme/", envvar="ACME_SSM_PREFIX"),
+    name="secrets",
+)
+app.add_typer(
+    build_quotas_app(console=console, default_targets=ACME_TARGETS, default_regions=["us-east-1"]),
+    name="quotas",
+)
+
+
+def main() -> None:
+    with aws_errors(console):
+        app()
+```
+
+`acme secrets list` now works bare, and `acme secrets --help` shows
+`[default: /acme/]` and `[env var: ACME_SSM_PREFIX]` rather than this library's.
+The prefix resolves in order: `--prefix`, then the environment variable named by
+`envvar`, then `default_prefix`, then an error. Pass a zero-argument callable as
+`default_prefix` when the host reads it from a config file and wants that read
+deferred to invocation, or `expose_prefix_option=False` to drop the flag and pin
+the namespace.
+
+`build_quotas_app` takes `default_service`, `default_targets` (a list or a
+callable) and `default_regions` on the same terms, plus `show_service_option` /
+`show_targets_option` to keep flags out of `--help` that a host's users have no
+business changing. Both factories accept `store_factory` / `default_targets`
+callables as the seam for host configuration — e.g.
+`store_factory=lambda prefix: SecretStore(prefix, region=cfg.region)`.
+
+Two details worth knowing. `aws_errors` is the wrapper that turns an expired SSO
+session into one readable line instead of a botocore traceback; wrap your entry
+point in it to get the same treatment. And the groups keep their per-invocation
+state in `ctx.meta` under namespaced keys rather than in `ctx.obj`, so mounting
+them never disturbs what your own callback stores there — a host command can
+reach both, via `pdum.aws.cli.secrets.store_from(ctx)` and `ctx.obj`.
+
 ## Development
 
 This project uses [UV](https://docs.astral.sh/uv/) for dependency management.
