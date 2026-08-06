@@ -5,21 +5,50 @@ credentials or a network.
 """
 
 import json
+import re
 
 import pytest
 from typer.testing import CliRunner
 
+from pdum.aws import cli
 from pdum.aws import quotas as quotas_lib
 from pdum.aws.cli import app
 from tests.fakes import FakeQuotasClient, FakeSsmClient
 
 runner = CliRunner()
 
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def plain(result) -> str:
+    """CliRunner output with ANSI styling stripped.
+
+    Never assert against ``result.stdout`` directly. rich emits colour whenever
+    ``FORCE_COLOR`` or ``CLICOLOR_FORCE`` is set — which it is in some shells and
+    most CI — even under CliRunner, and its *number highlighting* injects escapes
+    into the middle of otherwise-unstyled sentences, so ``"1 submitted"`` arrives
+    as ``"\x1b[1;2;36m1\x1b[0m\x1b[2m submitted"``. Asserting on raw stdout
+    therefore passes or fails depending on the developer's environment.
+    """
+    return _ANSI.sub("", result.stdout)
+
 
 @pytest.fixture(autouse=True)
-def _no_ambient_prefix(monkeypatch):
-    """Stop a developer's own PDUM_SSM_PREFIX from leaking into assertions."""
+def _stable_console(monkeypatch):
+    """Make CLI output deterministic regardless of the developer's environment.
+
+    Two independent sources of flakiness:
+
+    * ``PDUM_SSM_PREFIX`` would satisfy a prefix a test meant to omit.
+    * A narrow terminal wraps table cells mid-word, so ``case-L-BBB`` renders as
+      ``case-L…``. Setting ``COLUMNS`` here would be too late — rich reads it
+      **once, when the Console is constructed**, which happens when
+      :mod:`pdum.aws.cli` is imported. The width has to be pushed onto the live
+      Console objects instead.
+    """
     monkeypatch.delenv("PDUM_SSM_PREFIX", raising=False)
+    for console in (cli.console, cli.raw):
+        monkeypatch.setattr(console, "width", 200)
 
 
 @pytest.fixture
@@ -49,11 +78,11 @@ class TestTopLevel:
     def test_help_lists_both_command_groups(self):
         result = runner.invoke(app, ["--help"])
         assert result.exit_code == 0
-        assert "secrets" in result.stdout
-        assert "quotas" in result.stdout
+        assert "secrets" in plain(result)
+        assert "quotas" in plain(result)
 
     def test_no_args_shows_help_rather_than_failing_silently(self):
-        assert "Usage" in runner.invoke(app, []).stdout
+        assert "Usage" in plain(runner.invoke(app, []))
 
     def test_whoami(self, monkeypatch):
         monkeypatch.setattr(
@@ -62,7 +91,7 @@ class TestTopLevel:
         )
         result = runner.invoke(app, ["whoami"])
         assert result.exit_code == 0
-        assert "123456789012" in result.stdout
+        assert "123456789012" in plain(result)
 
 
 class TestSecretsPrefix:
@@ -74,12 +103,12 @@ class TestSecretsPrefix:
         monkeypatch.setenv("PDUM_SSM_PREFIX", "/myapp/")
         result = runner.invoke(app, ["secrets", "list"])
         assert result.exit_code == 0
-        assert "API_KEY" in result.stdout
+        assert "API_KEY" in plain(result)
 
     def test_a_root_prefix_is_refused_with_a_readable_message(self):
         result = runner.invoke(app, ["secrets", "--prefix", "/", "list"])
         assert result.exit_code == 2
-        assert "non-root prefix" in result.stdout
+        assert "non-root prefix" in plain(result)
 
 
 class TestSecretsCommands:
@@ -89,25 +118,25 @@ class TestSecretsCommands:
     def test_list(self, ssm):
         result = self.invoke("list")
         assert result.exit_code == 0
-        assert result.stdout.split() == ["API_KEY", "OTHER"]
+        assert plain(result).split() == ["API_KEY", "OTHER"]
 
     def test_list_long_shows_metadata(self, ssm):
         result = self.invoke("list", "--long")
         assert result.exit_code == 0
-        assert "secure" in result.stdout
-        assert "2026-08-05" in result.stdout
+        assert "secure" in plain(result)
+        assert "2026-08-05" in plain(result)
 
     def test_get_prints_the_value_alone(self, ssm, monkeypatch):
         monkeypatch.delenv("API_KEY", raising=False)
         result = self.invoke("get", "API_KEY")
         assert result.exit_code == 0
-        assert result.stdout.strip() == "sekrit"
+        assert plain(result).strip() == "sekrit"
 
     def test_get_missing_exits_nonzero(self, ssm, monkeypatch):
         monkeypatch.delenv("NOPE", raising=False)
         result = self.invoke("get", "NOPE")
         assert result.exit_code == 1
-        assert "not found" in result.stdout
+        assert "not found" in plain(result)
 
     def test_set_stores_securely_by_default(self, ssm):
         result = self.invoke("set", "NEW", "v")
@@ -122,7 +151,7 @@ class TestSecretsCommands:
     def test_set_refuses_an_empty_value(self, ssm):
         result = runner.invoke(app, ["secrets", "--prefix", "/myapp/", "set", "EMPTY", "-"], input="")
         assert result.exit_code == 1
-        assert "empty" in result.stdout
+        assert "empty" in plain(result)
         assert "/myapp/EMPTY" not in ssm.parameters
 
     def test_set_reads_stdin(self, ssm):
@@ -144,7 +173,7 @@ class TestSecretsCommands:
         monkeypatch.delenv("API_KEY", raising=False)
         monkeypatch.delenv("OTHER", raising=False)
         result = self.invoke("export")
-        assert "API_KEY=sekrit" in result.stdout
+        assert "API_KEY=sekrit" in plain(result)
 
 
 class TestSecretsImport:
@@ -171,40 +200,40 @@ class TestSecretsImport:
         path = self.write(tmp_path, "BRAND_NEW=1\n")
         result = runner.invoke(app, ["secrets", "--prefix", "/myapp/", "import", str(path), "--dry-run"])
         assert result.exit_code == 0
-        assert "would import" in result.stdout
+        assert "would import" in plain(result)
         assert "/myapp/BRAND_NEW" not in ssm.parameters
 
     def test_missing_file_exits_nonzero(self, ssm, tmp_path):
         result = runner.invoke(app, ["secrets", "--prefix", "/myapp/", "import", str(tmp_path / "absent")])
         assert result.exit_code == 1
-        assert "no such file" in result.stdout
+        assert "no such file" in plain(result)
 
 
 class TestQuotasCommands:
     def test_status_classifies_each_target(self, quotas):
         result = runner.invoke(app, ["quotas", "status", "--region", "us-east-1"])
         assert result.exit_code == 0
-        assert "satisfied" in result.stdout
-        assert "open" in result.stdout
-        assert "to-submit" in result.stdout
-        assert "1 open, 1 to submit" in result.stdout
+        assert "satisfied" in plain(result)
+        assert "open" in plain(result)
+        assert "to-submit" in plain(result)
+        assert "1 open, 1 to submit" in plain(result)
 
     def test_history_shows_status_and_case(self, quotas):
         result = runner.invoke(app, ["quotas", "history", "--region", "us-east-1"])
         assert result.exit_code == 0
-        assert "CASE_OPENED" in result.stdout
-        assert "case-L-BBB" in result.stdout
+        assert "CASE_OPENED" in plain(result)
+        assert "case-L-BBB" in plain(result)
 
     def test_history_open_filter(self, quotas):
         result = runner.invoke(app, ["quotas", "history", "--open"])
         assert result.exit_code == 0
-        assert "1 CASE_OPENED" in result.stdout
+        assert "1 CASE_OPENED" in plain(result)
 
     def test_request_submits_only_the_gap(self, quotas):
         result = runner.invoke(app, ["quotas", "request", "--region", "us-east-1"])
         assert result.exit_code == 0
         assert quotas.requested == [("L-CCC", 100.0)]
-        assert "1 submitted, 2 skipped" in result.stdout
+        assert "1 submitted, 2 skipped" in plain(result)
 
     def test_request_dry_run_writes_nothing(self, quotas):
         result = runner.invoke(app, ["quotas", "request", "--dry-run"])
@@ -219,13 +248,13 @@ class TestQuotasCommands:
 
         result = runner.invoke(app, ["quotas", "request"])
         assert result.exit_code == 0
-        assert "open-request cap" in result.stdout
+        assert "open-request cap" in plain(result)
         assert len(fake.requested) == 1
 
     def test_targets_emits_reusable_json(self):
         result = runner.invoke(app, ["quotas", "targets"])
         assert result.exit_code == 0
-        payload = json.loads(result.stdout)
+        payload = json.loads(plain(result))
         assert {"label", "code", "value"} <= set(payload[0])
 
     def test_targets_file_round_trips(self, quotas, tmp_path):
