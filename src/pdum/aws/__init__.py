@@ -23,7 +23,7 @@ print(aws.whoami()["Account"])
 
 from pdum.aws.core import client, resource, session, whoami
 
-__version__ = "0.1.0-alpha"
+__version__ = "0.1.0"
 
 __all__ = [
     "__version__",
