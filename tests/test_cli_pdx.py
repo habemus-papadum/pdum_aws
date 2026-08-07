@@ -19,7 +19,13 @@ import typer
 from typer.testing import CliRunner
 
 from pdum.aws.cli import add_pdx, add_pdx_doctor
-from pdum.aws.cli.pdx import EXIT_NOT_EXECUTABLE, EXIT_NOT_FOUND, load_environment, resolve_search_path
+from pdum.aws.cli.pdx import (
+    EXIT_NOT_EXECUTABLE,
+    EXIT_NOT_FOUND,
+    load_env_file,
+    load_secrets,
+    resolve_search_path,
+)
 from pdum.aws.secrets import SecretStore
 from tests.fakes import FakeSsmClient
 
@@ -37,15 +43,24 @@ def plain(text: str) -> str:
 
 @pytest.fixture(autouse=True)
 def _clean_environment(monkeypatch, tmp_path):
-    """No ambient path, no ambient secrets, and a directory with no ``.env``.
+    """An isolated environment and a directory with no ``.env`` above it.
 
-    The working directory matters: ``pdx`` searches *upward* for ``.env``, so a
-    test run from inside the project would otherwise find the repository's own.
+    The whole environment is snapshotted and restored, not just a list of
+    names: the code under test writes into ``os.environ`` directly, which
+    ``monkeypatch`` cannot undo, so a ``.env`` loaded by one test would
+    otherwise still be set for the next one.
+
+    The working directory matters too. ``pdx`` searches *upward* for ``.env``,
+    so a test run from inside this repository would find the repository's own.
     """
+    saved = dict(os.environ)
     monkeypatch.delenv("PDUM_SSM_PATH", raising=False)
-    for name in ("API_KEY", "SHARED", "OTHER"):
+    for name in ("API_KEY", "SHARED", "OTHER", "AWS_PROFILE"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.chdir(tmp_path)
+    yield
+    os.environ.clear()
+    os.environ.update(saved)
 
 
 @pytest.fixture
@@ -166,13 +181,14 @@ class TestEnvironmentLoading:
         assert env["OK"] == "yes"
         assert "db/PASSWORD" not in env
 
-    def test_load_environment_reports_each_outcome(self, ssm):
+    def test_load_secrets_reports_each_outcome(self, ssm):
         environ = {"SHARED": "already-here"}
-        report = load_environment(SecretStore("/myapp/:/org/"), environ)
+        report = load_secrets(SecretStore("/myapp/:/org/"), environ)
 
         assert report.applied == ["API_KEY"]
         assert report.already_set == ["SHARED"]
         assert report.skipped == []
+        assert report.source == "/myapp/:/org/"
         assert environ["SHARED"] == "already-here"
 
     def test_the_whole_store_is_read_in_one_pass(self, ssm, execs, monkeypatch):
@@ -184,6 +200,82 @@ class TestEnvironmentLoading:
 
         assert runner.invoke(pdx_app(), ["prog"]).exit_code == 0
         assert calls == []
+
+
+class TestEnvFileLoading:
+    """The whole file is the project's environment, not just the SSM path."""
+
+    def test_every_variable_in_the_file_reaches_the_command(self, ssm, execs, tmp_path):
+        write_env(
+            tmp_path,
+            """
+            PDUM_SSM_PATH=/myapp/
+            AWS_PROFILE=project-account
+            AWS_REGION=eu-west-1
+            FEATURE_FLAG=on
+            """,
+        )
+
+        assert runner.invoke(pdx_app(), ["prog"]).exit_code == 0
+        env = execs[0][2]
+        assert env["AWS_PROFILE"] == "project-account"
+        assert env["AWS_REGION"] == "eu-west-1"
+        assert env["FEATURE_FLAG"] == "on"
+
+    def test_the_file_is_applied_before_the_store_is_opened(self, execs, monkeypatch, tmp_path):
+        """Without this ordering the store is unreachable, or reads the wrong account.
+
+        ``AWS_PROFILE`` lives in the project's ``.env`` next to the search path,
+        so it has to be in the environment by the time the SSM client is built.
+        """
+        profiles: list[str | None] = []
+        fake = FakeSsmClient(SECRETS)
+
+        def client(*a, **k):
+            profiles.append(os.environ.get("AWS_PROFILE"))
+            return fake
+
+        monkeypatch.setattr("pdum.aws.secrets.client", client)
+        write_env(tmp_path, "AWS_PROFILE=project-account\nPDUM_SSM_PATH=/myapp/\n")
+
+        assert runner.invoke(pdx_app(), ["prog"]).exit_code == 0
+        assert profiles == ["project-account"]
+        assert execs[0][2]["API_KEY"] == "from-myapp"
+
+    def test_the_environment_beats_the_file(self, ssm, execs, tmp_path, monkeypatch):
+        write_env(tmp_path, "PDUM_SSM_PATH=/myapp/\nAWS_PROFILE=from-file\n")
+        monkeypatch.setenv("AWS_PROFILE", "from-the-shell")
+
+        assert runner.invoke(pdx_app(), ["prog"]).exit_code == 0
+        assert execs[0][2]["AWS_PROFILE"] == "from-the-shell"
+
+    def test_the_file_beats_the_store(self, ssm, execs, tmp_path):
+        """Layered most specific first, so a local override sticks."""
+        write_env(tmp_path, "PDUM_SSM_PATH=/myapp/\nAPI_KEY=overridden-locally\n")
+
+        assert runner.invoke(pdx_app(), ["prog"]).exit_code == 0
+        assert execs[0][2]["API_KEY"] == "overridden-locally"
+
+    def test_values_are_interpolated_as_any_env_consumer_would(self, ssm, execs, tmp_path, monkeypatch):
+        monkeypatch.setenv("STAGE", "dev")
+        write_env(tmp_path, "PDUM_SSM_PATH=/myapp/\nBUCKET=assets-${STAGE}\n")
+
+        assert runner.invoke(pdx_app(), ["prog"]).exit_code == 0
+        assert execs[0][2]["BUCKET"] == "assets-dev"
+
+    def test_load_env_file_reports_what_it_did(self, tmp_path):
+        write_env(tmp_path, "A=1\nB=2\n")
+        environ = {"B": "already-here"}
+
+        report = load_env_file(".env", environ)
+
+        assert report.applied == ["A"]
+        assert report.already_set == ["B"]
+        assert report.source.endswith(".env")
+        assert environ == {"A": "1", "B": "already-here"}
+
+    def test_load_env_file_is_none_when_there_is_no_file(self, tmp_path):
+        assert load_env_file(".env", {}) is None
 
 
 class TestSearchPathResolution:
@@ -234,7 +326,7 @@ class TestSearchPathResolution:
         assert runner.invoke(app, ["prog"]).exit_code == 0
         assert execs[0][2]["API_KEY"] == "from-myapp"
 
-    def test_an_env_file_with_a_directory_is_taken_literally(self, ssm, execs, tmp_path, monkeypatch):
+    def test_an_env_file_with_a_directory_is_taken_literally(self, ssm, execs, tmp_path):
         """An explicit path is never second-guessed by the upward search."""
         elsewhere = tmp_path / "config"
         elsewhere.mkdir()
@@ -242,12 +334,18 @@ class TestSearchPathResolution:
         # A nearer .env that the upward search would have found first.
         write_env(tmp_path, "PDUM_SSM_PATH=/decoy/\n")
 
-        app = pdx_app(env_file="config/.env")
-        assert runner.invoke(app, ["prog"]).exit_code == 0
+        assert runner.invoke(pdx_app(env_file="config/.env"), ["prog"]).exit_code == 0
         assert execs[0][2]["API_KEY"] == "from-myapp"
 
-        missing = pdx_app(env_file="config/absent.env")
-        assert runner.invoke(missing, ["prog"]).exit_code == 2
+    def test_an_env_file_that_is_not_there_is_not_fatal_by_itself(self, ssm, execs, tmp_path):
+        write_env(tmp_path, "PDUM_SSM_PATH=/decoy/\n")
+
+        result = runner.invoke(pdx_app(env_file="config/absent.env"), ["prog"])
+
+        # No file, so nothing supplied the path — not even the decoy, which the
+        # upward search would have found had the name been a bare one.
+        assert result.exit_code == 2
+        assert execs == []
 
     def test_no_path_anywhere_explains_the_options(self, ssm, execs):
         result = runner.invoke(pdx_app(), ["prog"])
@@ -263,17 +361,20 @@ class TestSearchPathResolution:
         assert result.exit_code == 2
         assert execs == []
 
-    def test_resolution_reports_its_source(self, tmp_path, monkeypatch):
-        kwargs = {"envvar": "PDUM_SSM_PATH", "env_file": ".env", "default_path": "/fallback/"}
+    def test_resolution_reports_its_source(self, tmp_path):
+        kwargs = {"envvar": "PDUM_SSM_PATH", "default_path": "/fallback/"}
         write_env(tmp_path, "PDUM_SSM_PATH=/from-file/\n")
 
-        from_env = resolve_search_path(**kwargs, environ={"PDUM_SSM_PATH": "/from-env/"})
-        assert from_env == ("/from-env/", "$PDUM_SSM_PATH")
+        already_exported = {"PDUM_SSM_PATH": "/from-env/"}
+        assert resolve_search_path(**kwargs, environ=already_exported) == ("/from-env/", "$PDUM_SSM_PATH")
 
-        path, source = resolve_search_path(**kwargs, environ={})
+        # After the file has been folded in, the path is one variable among the
+        # rest; only the report distinguishes where it came from.
+        environ: dict[str, str] = {}
+        report = load_env_file(".env", environ)
+        path, source = resolve_search_path(**kwargs, environ=environ, env_file_report=report)
         assert (path, source.endswith(".env")) == ("/from-file/", True)
 
-        (tmp_path / ".env").unlink()
         assert resolve_search_path(**kwargs, environ={}) == ("/fallback/", "built-in default")
         assert resolve_search_path(**kwargs | {"default_path": None}, environ={}) == (None, "")
 
@@ -326,6 +427,26 @@ class TestDoctor:
 
         assert result.exit_code == 0
         assert ".env" in plain(result.stdout)
+
+    def test_it_reports_what_the_env_file_contributed(self, ssm, tmp_path, monkeypatch):
+        write_env(tmp_path, "PDUM_SSM_PATH=/myapp/\nAWS_PROFILE=from-file\nAWS_REGION=eu-west-1\n")
+        monkeypatch.setenv("AWS_REGION", "already-here")
+
+        result = runner.invoke(self.doctor_app(), ["pdx-doctor"])
+        output = plain(result.stdout)
+
+        assert result.exit_code == 0
+        assert "AWS_PROFILE" in output
+        assert "kept from the environment" in output
+        assert "AWS_REGION" in output
+
+    def test_it_says_when_there_is_no_env_file(self, ssm, monkeypatch):
+        monkeypatch.setenv("PDUM_SSM_PATH", "/myapp/")
+
+        result = runner.invoke(self.doctor_app(), ["pdx-doctor"])
+
+        assert result.exit_code == 0
+        assert "no .env found" in plain(result.stdout)
 
     def test_it_shows_which_layer_holds_each_secret(self, ssm, monkeypatch):
         monkeypatch.setenv("PDUM_SSM_PATH", "/myapp/:/org/")

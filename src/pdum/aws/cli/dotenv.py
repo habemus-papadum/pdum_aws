@@ -17,10 +17,12 @@ PDUM_SSM_PATH=/myapp/:/org/   # the project's own layer
 as a prefix with a comment glued onto the end, and SSM would take that at face
 value.
 
-**Interpolation is deliberately off.** ``python-dotenv`` expands ``${VAR}`` by
-default, which would quietly turn the password ``p@ss${word}word`` into
-``p@ssword`` on its way into the store. These files hold secrets, so values are
-taken exactly as written.
+Interpolation of ``${VAR}`` is the caller's choice, because the two callers want
+opposite things. Loading a project's environment should expand, as every other
+``.env`` consumer does. Importing into the store should not: a value on its way
+into permanent storage must arrive exactly as written, or the password
+``p@ss${word}word`` silently becomes ``p@ssword`` and nothing records that it
+ever said more.
 """
 
 from pathlib import Path
@@ -30,13 +32,17 @@ from dotenv import dotenv_values, find_dotenv
 __all__ = ["find_env_file", "read_env_file"]
 
 
-def read_env_file(path: Path | str) -> dict[str, str]:
-    """Read *path* as a ``.env`` file, without interpolation.
+def read_env_file(path: Path | str, *, interpolate: bool = True) -> dict[str, str]:
+    """Read *path* as a ``.env`` file.
 
     Parameters
     ----------
     path : pathlib.Path or str
         File to read.
+    interpolate : bool, default True
+        Expand ``${VAR}`` against the environment and earlier entries, as
+        ``python-dotenv`` does by default. Pass ``False`` when the values are
+        headed somewhere permanent; see the module docstring.
 
     Returns
     -------
@@ -45,7 +51,8 @@ def read_env_file(path: Path | str) -> dict[str, str]:
         dropped rather than reported as ``None``, so every value here is a
         string the caller can use directly.
     """
-    return {key: value for key, value in dotenv_values(path, interpolate=False).items() if value is not None}
+    values = dotenv_values(path, interpolate=interpolate)
+    return {key: value for key, value in values.items() if value is not None}
 
 
 def find_env_file(name: str = ".env") -> Path | None:

@@ -155,31 +155,48 @@ to run, so none of *its* flags can ever be mistaken for one of pdx's, and `--`
 is available but never required. The single exception is a leading `--help`,
 which click reserves; `pdx python --help` still reaches Python.
 
-Configuration therefore comes entirely from the environment. The search path is
-`PDUM_SSM_PATH` if set, otherwise a `PDUM_SSM_PATH=` line in the nearest `.env`,
-searched upward from the working directory — so `pdx` works from anywhere inside
-a project:
+Configuration therefore comes entirely from the environment, in three layers,
+most specific first:
+
+1. **the environment you already have** — never overwritten, so
+   `STRIPE_KEY=sk_test_... pdx ./run-tests` overrides for that one run, and a CI
+   job's injected variables are never undone;
+2. **the nearest `.env`**, searched for upward from the working directory, so
+   `pdx` works from anywhere inside a project;
+3. **the SSM store**, on the search path named by `PDUM_SSM_PATH`.
+
+The *whole* `.env` is loaded, not just the search path — and it is applied
+before the store is opened, because that is where the credentials for reaching
+the store live:
 
 ```ini
 # .env, at the top of the project
+AWS_PROFILE=my-account
+AWS_REGION=us-east-1
 PDUM_SSM_PATH=/myapp/:/org/
 ```
 
-Only that one line is read. The file says *where the secrets live*; it is not a
-second source of secrets, since then a value's origin would be ambiguous. Use
-`secrets import` to move a `.env` into the store.
+Values are interpolated, as any other `.env` consumer would, so `BUCKET=assets-${STAGE}`
+works. (`secrets import` deliberately does *not* interpolate: those values are
+going into permanent storage, where a silently expanded `${...}` cannot be
+recovered.)
 
-Two properties worth relying on. **Variables already set are left alone** — your
-shell is more specific than the store, so `STRIPE_KEY=sk_test_... pdx ./run-tests`
-overrides for that one run, and a CI job's injected variables are never undone.
-And this is a real `execvp`, not a subprocess: the command keeps pdx's PID, so
-signals, job control, exit status and the terminal belong to it directly, with
-nothing left in the middle to forward them.
+Because the file is a layer above the store, a name set in `.env` wins over the
+same name in SSM — which is how you override one secret locally without touching
+the shared store.
+
+The handover is a real `execvp`, not a subprocess: the command keeps pdx's PID,
+so signals, job control, exit status and the terminal belong to it directly,
+with nothing left in the middle to forward them. It inherits the environment all
+three layers built up.
 
 `pdx-doctor` shows what that adds up to without running anything:
 
 ```console
 $ pdum-aws pdx-doctor
+.env /work/myapp/.env
+  sets AWS_PROFILE, AWS_REGION, PDUM_SSM_PATH
+  kept from the environment SHARED
 search path /myapp/:/org/  (from /work/myapp/.env)
 NAME      LAYER    PDX WOULD
 API_KEY   /myapp/  set it
@@ -189,10 +206,11 @@ SHARED    /myapp/  keep the environment's
 ```
 
 It answers what `secrets list` cannot, because the questions are about this
-process rather than about the store: which search path resolved and *from
-where*, and which names your environment already holds — the reason a program
-run under `pdx` can see a value that is not the one in SSM. It reports names and
-origins only, never values, and never decrypts; use `secrets get` for a value.
+process rather than about the store: which `.env` was found and what it
+contributed, which search path resolved and *from where*, and which names your
+environment already holds — the reason a program run under `pdx` can see a value
+that is not the one in SSM. It reports names and origins only, never values, and
+never decrypts; use `secrets get` for a value.
 
 ## Embedding these commands in your own CLI
 

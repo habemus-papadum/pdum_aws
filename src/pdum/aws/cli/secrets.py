@@ -295,7 +295,9 @@ def build_secrets_app(
 
         pushed: list[str] = []
         skipped: list[str] = []
-        for key, value in read_env_file(path).items():
+        # Not interpolated: these values are going into permanent storage, where
+        # a silently expanded ``${...}`` could not be recovered.
+        for key, value in read_env_file(path, interpolate=False).items():
             if key in SKIP_ON_IMPORT:
                 skipped.append(key)
                 continue
