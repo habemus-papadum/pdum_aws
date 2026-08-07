@@ -38,6 +38,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from pdum.aws.cli.dotenv import read_env_file
 from pdum.aws.cli.output import DEFAULT_CONSOLE, emit
 from pdum.aws.secrets import SecretStore
 
@@ -294,12 +295,7 @@ def build_secrets_app(
 
         pushed: list[str] = []
         skipped: list[str] = []
-        for line in path.read_text().splitlines():
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, value = (part.strip() for part in line.split("=", 1))
-            value = value.strip("'\"")
+        for key, value in read_env_file(path).items():
             if key in SKIP_ON_IMPORT:
                 skipped.append(key)
                 continue

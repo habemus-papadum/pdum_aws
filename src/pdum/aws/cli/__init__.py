@@ -4,6 +4,15 @@
 $ pdum-aws whoami
 $ pdum-aws secrets --path /myapp/ list
 $ pdum-aws quotas status --region us-east-1
+$ pdum-aws pdx-doctor
+```
+
+Installing the package also provides ``pdx``, a short form of ``pdum-aws pdx``:
+it loads a project's secrets into the environment and hands the process over to
+a command. See :mod:`pdum.aws.cli.pdx`.
+
+```console
+$ pdx npm run dev
 ```
 
 Credentials come from the ambient environment, exactly as in the library. There
@@ -59,11 +68,14 @@ stores there for its own commands.
 import typer
 
 from pdum.aws.cli.identity import add_whoami
-from pdum.aws.cli.output import DEFAULT_CONSOLE, aws_errors, emit
+from pdum.aws.cli.output import DEFAULT_CONSOLE, DEFAULT_STDERR_CONSOLE, aws_errors, emit
+from pdum.aws.cli.pdx import add_pdx, add_pdx_doctor
 from pdum.aws.cli.quotas import build_quotas_app
 from pdum.aws.cli.secrets import build_secrets_app
 
 __all__ = [
+    "add_pdx",
+    "add_pdx_doctor",
     "add_whoami",
     "app",
     "aws_errors",
@@ -78,10 +90,17 @@ __all__ = [
 #: their own to the factories instead.
 console = DEFAULT_CONSOLE
 
-app = typer.Typer(help="AWS utilities: SSM secrets and service quotas.", no_args_is_help=True, add_completion=False)
+app = typer.Typer(
+    help="AWS utilities: SSM secrets, service quotas, and running commands with secrets loaded.",
+    no_args_is_help=True,
+    add_completion=False,
+)
 add_whoami(app, console=console)
 app.add_typer(build_secrets_app(console=console), name="secrets")
 app.add_typer(build_quotas_app(console=console), name="quotas")
+# Diagnostics on stderr, because this one's stdout belongs to the program it execs.
+add_pdx(app, console=DEFAULT_STDERR_CONSOLE)
+add_pdx_doctor(app, console=console)
 
 
 def main() -> None:

@@ -32,9 +32,17 @@
 
 ::: pdum.aws.cli.quotas
 
+## pdum.aws.cli.pdx
+
+::: pdum.aws.cli.pdx
+
 ## pdum.aws.cli.identity
 
 ::: pdum.aws.cli.identity
+
+## pdum.aws.cli.dotenv
+
+::: pdum.aws.cli.dotenv
 
 ## pdum.aws.cli.output
 

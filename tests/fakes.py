@@ -129,7 +129,7 @@ class _SsmByPathPaginator:
     def __init__(self, ssm: FakeSsmClient) -> None:
         self._ssm = ssm
 
-    def paginate(self, Path: str, **_kwargs: Any) -> list[dict[str, Any]]:  # noqa: N803
+    def paginate(self, Path: str, WithDecryption: bool = False, **_kwargs: Any) -> list[dict[str, Any]]:  # noqa: N803
         return [
             {
                 "Parameters": [
@@ -138,9 +138,21 @@ class _SsmByPathPaginator:
                         "Type": self._ssm.types.get(path, "SecureString"),
                         "Version": 1,
                         "LastModifiedDate": datetime(2026, 8, 5, 12, 0, tzinfo=UTC),
+                        "Value": self._value(path, WithDecryption),
                     }
                     for path in sorted(self._ssm.parameters)
                     if path.startswith(Path)
                 ]
             }
         ]
+
+    def _value(self, path: str, decrypt: bool) -> str:
+        """A ``SecureString`` comes back as ciphertext unless decryption is asked for.
+
+        The by-path API always returns a ``Value``; ``WithDecryption`` decides
+        whether an encrypted one is legible. Reproducing that is what lets a
+        test tell a listing that decrypts from one that deliberately does not.
+        """
+        if self._ssm.types.get(path) == "SecureString" and not decrypt:
+            return f"AQICAHciphertext:{path}"
+        return self._ssm.parameters[path]

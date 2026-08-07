@@ -20,12 +20,14 @@ authors = [
 requires-python = ">=3.14"
 dependencies = [
     "boto3>=1.35",
+    "python-dotenv>=1.0",
     "rich>=13.7",
     "typer>=0.15",
 ]
 
 [project.scripts]
 pdum-aws = "pdum.aws.cli:main"
+pdx = "pdum.aws.cli.pdx:main"
 
 [project.urls]
 Homepage = "https://github.com/habemus-papadum/pdum_aws"

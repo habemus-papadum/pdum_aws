@@ -139,6 +139,61 @@ Do not infer a quota's value from its request status. AWS also raises limits on
 young accounts automatically, independently of any request — `quotas status`
 shows the applied value, which is the number that matters.
 
+### Running a command with the secrets loaded
+
+Installing the package also provides `pdx`, which puts a project's secrets in
+the environment and hands the process over to a command:
+
+```bash
+pdx npm run dev
+pdx python -m my_service --port 8080
+pdx -- ls -la
+```
+
+**`pdx` takes no options of its own.** Everything after the name is the command
+to run, so none of *its* flags can ever be mistaken for one of pdx's, and `--`
+is available but never required. The single exception is a leading `--help`,
+which click reserves; `pdx python --help` still reaches Python.
+
+Configuration therefore comes entirely from the environment. The search path is
+`PDUM_SSM_PATH` if set, otherwise a `PDUM_SSM_PATH=` line in the nearest `.env`,
+searched upward from the working directory — so `pdx` works from anywhere inside
+a project:
+
+```ini
+# .env, at the top of the project
+PDUM_SSM_PATH=/myapp/:/org/
+```
+
+Only that one line is read. The file says *where the secrets live*; it is not a
+second source of secrets, since then a value's origin would be ambiguous. Use
+`secrets import` to move a `.env` into the store.
+
+Two properties worth relying on. **Variables already set are left alone** — your
+shell is more specific than the store, so `STRIPE_KEY=sk_test_... pdx ./run-tests`
+overrides for that one run, and a CI job's injected variables are never undone.
+And this is a real `execvp`, not a subprocess: the command keeps pdx's PID, so
+signals, job control, exit status and the terminal belong to it directly, with
+nothing left in the middle to forward them.
+
+`pdx-doctor` shows what that adds up to without running anything:
+
+```console
+$ pdum-aws pdx-doctor
+search path /myapp/:/org/  (from /work/myapp/.env)
+NAME      LAYER    PDX WOULD
+API_KEY   /myapp/  set it
+ORG_ONLY  /org/    set it
+SHARED    /myapp/  keep the environment's
+  2 to set it, 1 to keep the environment's
+```
+
+It answers what `secrets list` cannot, because the questions are about this
+process rather than about the store: which search path resolved and *from
+where*, and which names your environment already holds — the reason a program
+run under `pdx` can see a value that is not the one in SSM. It reports names and
+origins only, never values, and never decrypts; use `secrets get` for a value.
+
 ## Embedding these commands in your own CLI
 
 Each group is produced by a factory, so another application can mount the same
@@ -185,6 +240,20 @@ callable) and `default_regions` on the same terms, plus `show_service_option` /
 business changing. Both factories accept `store_factory` / `default_targets`
 callables as the seam for host configuration — e.g.
 `store_factory=lambda prefix: SecretStore(prefix, region=cfg.region)`.
+
+`pdx` and `pdx-doctor` attach the same way, as single commands rather than
+groups, and take the same `default_path` / `envvar` / `env_file` arguments:
+
+```python
+from pdum.aws.cli import add_pdx, add_pdx_doctor
+
+add_pdx(app, default_path="/acme/:/org/", envvar="ACME_SSM_PATH")
+add_pdx_doctor(app, console=console, default_path="/acme/:/org/", envvar="ACME_SSM_PATH")
+```
+
+Give `add_pdx` a console that writes to **stderr** — the default does. Its
+stdout belongs to the program it execs, and a diagnostic printed there would
+corrupt that program's output the moment anyone piped it.
 
 Two details worth knowing. `aws_errors` is the wrapper that turns an expired SSO
 session into one readable line instead of a botocore traceback; wrap your entry

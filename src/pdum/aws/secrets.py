@@ -319,6 +319,35 @@ class SecretStore:
         """
         return [row["name"] for row in self.describe() if not row["shadowed"]]
 
+    def read_all(self) -> dict[str, str]:
+        """Read every secret on the search path in one pass, first layer winning.
+
+        Costs one paginated call per layer rather than one call per name, which
+        is what makes materialising a whole store — into a process environment,
+        say — cheap enough to do on every invocation. Unlike :meth:`describe`
+        this decrypts, so it does pull values over the wire.
+
+        The environment is deliberately **not** consulted, unlike :meth:`get`:
+        this is the store's own view, leaving the caller to decide how it should
+        interact with variables that are already set.
+
+        Values are cached as if each name had been fetched individually, so a
+        later :meth:`get` for any of them costs nothing.
+
+        Returns
+        -------
+        dict of str to str
+            Secret name to value, shadowed layers excluded.
+        """
+        paginator = self.ssm.get_paginator("get_parameters_by_path")
+        out: dict[str, str] = {}
+        for prefix in self.prefixes:
+            for page in paginator.paginate(Path=prefix, Recursive=True, WithDecryption=True):
+                for p in page["Parameters"]:
+                    out.setdefault(p["Name"][len(prefix) :], p["Value"])
+        self._cache.update(out)
+        return out
+
     def describe(self) -> list[dict[str, Any]]:
         """List metadata for each secret on the search path.
 

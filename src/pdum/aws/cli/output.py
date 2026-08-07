@@ -20,12 +20,17 @@ from contextlib import contextmanager
 from botocore.exceptions import BotoCoreError, ClientError
 from rich.console import Console
 
-__all__ = ["DEFAULT_CONSOLE", "aws_errors", "emit"]
+__all__ = ["DEFAULT_CONSOLE", "DEFAULT_STDERR_CONSOLE", "aws_errors", "emit"]
 
 #: Used by any group built without an explicit ``console``. A module-level
 #: singleton rather than a fresh Console per factory call, so that two groups
 #: built separately still share one width and one output stream.
 DEFAULT_CONSOLE = Console()
+
+#: For commands whose stdout belongs to something else. ``pdx`` hands its stdout
+#: to the program it execs, so its own diagnostics have to go to stderr or they
+#: would corrupt that program's output when it is piped.
+DEFAULT_STDERR_CONSOLE = Console(stderr=True)
 
 
 def emit(console: Console, text: str) -> None:
