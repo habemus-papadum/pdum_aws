@@ -5,6 +5,7 @@ credentials or a network.
 """
 
 import json
+import os
 import re
 
 import pytest
@@ -34,12 +35,16 @@ def plain(result) -> str:
 
 
 @pytest.fixture(autouse=True)
-def _stable_console(monkeypatch):
+def _stable_console(monkeypatch, tmp_path):
     """Make CLI output deterministic regardless of the developer's environment.
 
-    Two independent sources of flakiness:
+    Three independent sources of flakiness:
 
     * ``PDUM_SSM_PATH`` would satisfy a search path a test meant to omit.
+    * The app loads the nearest ``.env`` before every command, searching upward
+      — run from a real project, that search would find a real file. Each test
+      runs from its own empty directory instead, and puts a ``.env`` there when
+      the test is about one.
     * A narrow terminal wraps table cells mid-word, so ``case-L-BBB`` renders as
       ``case-L…``. Setting ``COLUMNS`` here would be too late — rich reads it
       **once, when the Console is constructed**, which happens when
@@ -47,6 +52,7 @@ def _stable_console(monkeypatch):
       Console object instead.
     """
     monkeypatch.delenv("PDUM_SSM_PATH", raising=False)
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(cli.console, "width", 200)
 
 
@@ -108,6 +114,42 @@ class TestSecretsPath:
         result = runner.invoke(app, ["secrets", "--path", "/", "list"])
         assert result.exit_code == 2
         assert "non-root prefix" in plain(result)
+
+
+class TestProjectEnv:
+    """The nearest ``.env`` is loaded, whole, before any command runs."""
+
+    def test_the_env_file_supplies_the_search_path(self, ssm, tmp_path):
+        (tmp_path / ".env").write_text("PDUM_SSM_PATH=/myapp/\n")
+        result = runner.invoke(app, ["secrets", "list"])
+        assert result.exit_code == 0
+        assert "API_KEY" in plain(result)
+
+    def test_the_whole_file_is_loaded_not_only_the_path(self, ssm, tmp_path, monkeypatch):
+        # Pre-registering an empty value does two things: empty reads as unset
+        # (agreeing with SecretStore.get), so the file's value still applies,
+        # and monkeypatch restores the variable's absence when the test ends.
+        monkeypatch.setenv("PROJECT_FLAG", "")
+        (tmp_path / ".env").write_text("PDUM_SSM_PATH=/myapp/\nPROJECT_FLAG=on\n")
+        result = runner.invoke(app, ["secrets", "list"])
+        assert result.exit_code == 0
+        assert os.environ["PROJECT_FLAG"] == "on"
+
+    def test_the_shell_beats_the_file(self, ssm, tmp_path, monkeypatch):
+        (tmp_path / ".env").write_text("PDUM_SSM_PATH=/elsewhere/\n")
+        monkeypatch.setenv("PDUM_SSM_PATH", "/myapp/")
+        result = runner.invoke(app, ["secrets", "list"])
+        assert result.exit_code == 0
+        assert "API_KEY" in plain(result)
+
+    def test_pdx_doctor_does_its_own_loading(self, ssm, tmp_path):
+        # The doctor's report says which variables the .env *would* set; had the
+        # app pre-loaded the file, they would all read "kept from the
+        # environment" and the report would be wrong.
+        (tmp_path / ".env").write_text("PDUM_SSM_PATH=/myapp/\n")
+        result = runner.invoke(app, ["pdx-doctor"])
+        assert result.exit_code == 0
+        assert "sets PDUM_SSM_PATH" in plain(result)
 
 
 class TestSecretsCommands:

@@ -113,22 +113,26 @@ is submit, wait for cases to be decided, submit again.
 
 ## Command line
 
-Installing the package provides `pdum-aws`. There is deliberately no `--profile`
-flag — pick an account the standard way, so this behaves like every other AWS
-tool on the box.
+Installing the package provides `pdum-aws`. Run inside a project, it first
+loads the nearest `.env` and its `.env.local` overlay — the whole file, exactly
+as `pdx` reads it, never overriding what the shell already set — so a project
+whose `.env` names `AWS_PROFILE` and `PDUM_SSM_PATH` gets every command bare.
+Only the files are loaded, never the store; `pdx` and `pdx-doctor` assemble
+the environment themselves. There is deliberately no `--profile` flag — pick
+an account the standard way, so this behaves like every other AWS tool on the
+box.
 
 ```bash
-AWS_PROFILE=my-account pdum-aws whoami
+AWS_PROFILE=my-account pdum-aws whoami   # outside any project
 ```
 
 ### Secrets
 
-The search path has no default. Pass `--path` or set `PDUM_SSM_PATH` once —
-one or more prefixes, colon-separated, most specific first.
+The search path has no default: `PDUM_SSM_PATH` — one or more prefixes,
+colon-separated, most specific first — in the `.env` or the shell, or `--path`
+per invocation.
 
 ```bash
-export PDUM_SSM_PATH=/myapp/:/org/
-
 pdum-aws secrets list                  # names only
 pdum-aws secrets list --long           # type, version, last modified
 pdum-aws secrets get API_KEY           # value alone, safe to pipe

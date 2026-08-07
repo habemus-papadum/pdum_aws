@@ -15,8 +15,19 @@ a command. See :mod:`pdum.aws.cli.pdx`.
 $ pdx npm run dev
 ```
 
-Credentials come from the ambient environment, exactly as in the library. There
-is deliberately no ``--profile`` flag: select an account the standard way, so
+Run inside a project, the CLI first loads the nearest ``.env`` and its
+``.env.local`` overlay — the whole file, exactly as ``pdx`` reads it, never
+overriding what the shell already set. A project whose ``.env`` names
+``AWS_PROFILE`` and ``PDUM_SSM_PATH`` therefore gets every command bare: no
+exports, no flags. Only the files are loaded, never the SSM store — fetching
+secrets in order to manage secrets would be circular. ``pdx`` and
+``pdx-doctor`` are excluded: they assemble the environment themselves and
+report where every layer came from, and a pre-loaded ``.env`` would blur that
+report.
+
+Beyond that, credentials come from the ambient environment, exactly as in the
+library. There is deliberately no ``--profile`` flag: select an account the
+standard way — ``AWS_PROFILE`` in the project's ``.env`` or in the shell — so
 this behaves like every other AWS tool on the box.
 
 ```console
@@ -24,8 +35,8 @@ $ AWS_PROFILE=my-account pdum-aws quotas status
 ```
 
 The secrets commands need a search path — one or more SSM prefixes, colon-
-separated, most specific first — which has no default. Pass ``--path`` or set
-``PDUM_SSM_PATH`` once in your shell.
+separated, most specific first — which has no default: ``PDUM_SSM_PATH`` in
+the ``.env`` or the shell, or ``--path`` per invocation.
 
 Embedding these commands elsewhere
 ----------------------------------
@@ -65,6 +76,8 @@ rather than in ``ctx.obj``, so mounting them never disturbs what a host app
 stores there for its own commands.
 """
 
+import os
+
 import typer
 
 from pdum.aws.cli.identity import add_whoami
@@ -72,6 +85,7 @@ from pdum.aws.cli.output import DEFAULT_CONSOLE, DEFAULT_STDERR_CONSOLE, aws_err
 from pdum.aws.cli.pdx import add_pdx, add_pdx_doctor
 from pdum.aws.cli.quotas import build_quotas_app
 from pdum.aws.cli.secrets import build_secrets_app
+from pdum.aws.env import load_env_files
 
 __all__ = [
     "add_pdx",
@@ -101,6 +115,25 @@ app.add_typer(build_quotas_app(console=console), name="quotas")
 # Diagnostics on stderr, because this one's stdout belongs to the program it execs.
 add_pdx(app, console=DEFAULT_STDERR_CONSOLE)
 add_pdx_doctor(app, console=console)
+
+#: Commands that assemble the process environment themselves. They load the
+#: ``.env`` pair as one layer among several and report where every variable
+#: came from; loading it here first would make those variables look as though
+#: the shell had set them.
+_BUILDS_OWN_ENV = frozenset({"pdx", "pdx-doctor"})
+
+
+@app.callback()
+def _project_env(ctx: typer.Context) -> None:
+    """Load the nearest ``.env`` and its overlay before the command runs.
+
+    The whole file, exactly as ``pdx`` reads it, never overriding what the
+    shell already set — so inside a project the bare commands work without
+    exports. Only the files are loaded, never the SSM store: fetching secrets
+    in order to manage secrets would be circular.
+    """
+    if ctx.invoked_subcommand not in _BUILDS_OWN_ENV:
+        load_env_files(".env", os.environ)
 
 
 def main() -> None:
