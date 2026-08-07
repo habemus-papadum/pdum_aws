@@ -5,16 +5,18 @@
 | Name                             |    Stmts |     Miss |   Cover |   Missing |
 |--------------------------------- | -------: | -------: | ------: | --------: |
 | src/pdum/aws/\_\_init\_\_.py     |        3 |        0 |    100% |           |
-| src/pdum/aws/cli/\_\_init\_\_.py |       14 |        2 |     86% |     94-95 |
+| src/pdum/aws/cli/\_\_init\_\_.py |       17 |        2 |     88% |   113-114 |
 | src/pdum/aws/cli/\_\_main\_\_.py |        2 |        2 |      0% |       7-9 |
+| src/pdum/aws/cli/dotenv.py       |       11 |        0 |    100% |           |
 | src/pdum/aws/cli/identity.py     |       12 |        0 |    100% |           |
-| src/pdum/aws/cli/output.py       |       15 |        0 |    100% |           |
+| src/pdum/aws/cli/output.py       |       16 |        0 |    100% |           |
+| src/pdum/aws/cli/pdx.py          |      118 |        2 |     98% |   366-367 |
 | src/pdum/aws/cli/quotas.py       |      118 |        4 |     97% |99, 101, 225-226 |
-| src/pdum/aws/cli/secrets.py      |      129 |        2 |     98% |   222-223 |
+| src/pdum/aws/cli/secrets.py      |      125 |        2 |     98% |   223-224 |
 | src/pdum/aws/core.py             |       11 |        0 |    100% |           |
 | src/pdum/aws/quotas.py           |      100 |        1 |     99% |       213 |
-| src/pdum/aws/secrets.py          |       99 |        1 |     99% |       300 |
-| **TOTAL**                        |  **503** |   **12** | **98%** |           |
+| src/pdum/aws/secrets.py          |      108 |        1 |     99% |       300 |
+| **TOTAL**                        |  **641** |   **14** | **98%** |           |
 
 
 ## Setup coverage badge
