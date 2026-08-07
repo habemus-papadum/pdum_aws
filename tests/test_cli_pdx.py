@@ -19,13 +19,8 @@ import typer
 from typer.testing import CliRunner
 
 from pdum.aws.cli import add_pdx, add_pdx_doctor
-from pdum.aws.cli.pdx import (
-    EXIT_NOT_EXECUTABLE,
-    EXIT_NOT_FOUND,
-    load_env_file,
-    load_secrets,
-    resolve_search_path,
-)
+from pdum.aws.cli.pdx import EXIT_NOT_EXECUTABLE, EXIT_NOT_FOUND
+from pdum.aws.env import load_env_files, load_secrets, resolve_search_path
 from pdum.aws.secrets import SecretStore
 from tests.fakes import FakeSsmClient
 
@@ -263,19 +258,95 @@ class TestEnvFileLoading:
         assert runner.invoke(pdx_app(), ["prog"]).exit_code == 0
         assert execs[0][2]["BUCKET"] == "assets-dev"
 
-    def test_load_env_file_reports_what_it_did(self, tmp_path):
+    def test_load_env_files_reports_what_it_did(self, tmp_path):
         write_env(tmp_path, "A=1\nB=2\n")
         environ = {"B": "already-here"}
 
-        report = load_env_file(".env", environ)
+        report = load_env_files(".env", environ)
 
         assert report.applied == ["A"]
         assert report.already_set == ["B"]
         assert report.source.endswith(".env")
         assert environ == {"A": "1", "B": "already-here"}
 
-    def test_load_env_file_is_none_when_there_is_no_file(self, tmp_path):
-        assert load_env_file(".env", {}) is None
+    def test_load_env_files_is_none_when_there_is_no_file(self, tmp_path):
+        assert load_env_files(".env", {}) is None
+
+
+class TestLocalOverlay:
+    """``.env.local`` overlays the ``.env`` it sits beside."""
+
+    def test_local_wins_over_the_committed_file(self, ssm, execs, tmp_path):
+        write_env(tmp_path, "PDUM_SSM_PATH=/myapp/\nAWS_PROFILE=team-account\nSTAGE=prod\n")
+        write_env(tmp_path, "AWS_PROFILE=my-sandbox\n", name=".env.local")
+
+        assert runner.invoke(pdx_app(), ["prog"]).exit_code == 0
+        env = execs[0][2]
+        assert env["AWS_PROFILE"] == "my-sandbox"
+        assert env["STAGE"] == "prod"  # untouched by the overlay
+
+    def test_local_can_redirect_the_search_path(self, ssm, execs, tmp_path):
+        write_env(tmp_path, "PDUM_SSM_PATH=/decoy/\n")
+        write_env(tmp_path, "PDUM_SSM_PATH=/myapp/\n", name=".env.local")
+
+        assert runner.invoke(pdx_app(), ["prog"]).exit_code == 0
+        assert execs[0][2]["API_KEY"] == "from-myapp"
+
+    def test_interpolation_reaches_across_the_two_files(self, ssm, execs, tmp_path):
+        """Why they are parsed as one document rather than merged as two dicts."""
+        write_env(tmp_path, "PDUM_SSM_PATH=/myapp/\nSTAGE=prod\n")
+        write_env(tmp_path, "BUCKET=assets-${STAGE}\n", name=".env.local")
+
+        assert runner.invoke(pdx_app(), ["prog"]).exit_code == 0
+        assert execs[0][2]["BUCKET"] == "assets-prod"
+
+    def test_the_shell_still_beats_both(self, ssm, execs, tmp_path, monkeypatch):
+        write_env(tmp_path, "PDUM_SSM_PATH=/myapp/\nAWS_PROFILE=team-account\n")
+        write_env(tmp_path, "AWS_PROFILE=my-sandbox\n", name=".env.local")
+        monkeypatch.setenv("AWS_PROFILE", "from-the-shell")
+
+        assert runner.invoke(pdx_app(), ["prog"]).exit_code == 0
+        assert execs[0][2]["AWS_PROFILE"] == "from-the-shell"
+
+    def test_the_overlay_is_taken_from_beside_the_file_that_was_found(self, ssm, execs, tmp_path, monkeypatch):
+        """The search is for ``.env`` alone, so one directory always wins."""
+        write_env(tmp_path, "PDUM_SSM_PATH=/myapp/\nWHICH=root\n")
+        write_env(tmp_path, "WHICH=root-local\n", name=".env.local")
+        nested = tmp_path / "services" / "api"
+        nested.mkdir(parents=True)
+        # A stray local file down here has no .env to anchor it, so it is ignored.
+        write_env(nested, "WHICH=nested-local\n", name=".env.local")
+        monkeypatch.chdir(nested)
+
+        assert runner.invoke(pdx_app(), ["prog"]).exit_code == 0
+        assert execs[0][2]["WHICH"] == "root-local"
+
+    def test_a_lone_local_file_is_not_used(self, ssm, execs, tmp_path):
+        write_env(tmp_path, "PDUM_SSM_PATH=/myapp/\n", name=".env.local")
+
+        result = runner.invoke(pdx_app(), ["prog"])
+
+        # Nothing anchored the search, so no path was found.
+        assert result.exit_code == 2
+        assert execs == []
+
+    def test_the_report_names_both_files(self, tmp_path):
+        write_env(tmp_path, "A=1\n")
+        write_env(tmp_path, "B=2\n", name=".env.local")
+
+        report = load_env_files(".env", {})
+
+        assert report.applied == ["A", "B"]
+        assert report.source.endswith(".env + .env.local")
+
+    def test_a_host_naming_its_own_file_gets_the_matching_overlay(self, ssm, execs, tmp_path):
+        write_env(tmp_path, "ACME_SSM_PATH=/decoy/\n", name="acme.env")
+        write_env(tmp_path, "ACME_SSM_PATH=/myapp/\n", name="acme.env.local")
+
+        app = pdx_app(envvar="ACME_SSM_PATH", env_file="acme.env")
+
+        assert runner.invoke(app, ["prog"]).exit_code == 0
+        assert execs[0][2]["API_KEY"] == "from-myapp"
 
 
 class TestSearchPathResolution:
@@ -371,7 +442,7 @@ class TestSearchPathResolution:
         # After the file has been folded in, the path is one variable among the
         # rest; only the report distinguishes where it came from.
         environ: dict[str, str] = {}
-        report = load_env_file(".env", environ)
+        report = load_env_files(".env", environ)
         path, source = resolve_search_path(**kwargs, environ=environ, env_file_report=report)
         assert (path, source.endswith(".env")) == ("/from-file/", True)
 
@@ -439,6 +510,17 @@ class TestDoctor:
         assert "AWS_PROFILE" in output
         assert "kept from the environment" in output
         assert "AWS_REGION" in output
+
+    def test_it_names_both_files_when_there_is_an_overlay(self, ssm, tmp_path):
+        write_env(tmp_path, "PDUM_SSM_PATH=/myapp/\n")
+        write_env(tmp_path, "AWS_PROFILE=my-sandbox\n", name=".env.local")
+
+        result = runner.invoke(self.doctor_app(), ["pdx-doctor"])
+        output = plain(result.stdout)
+
+        assert result.exit_code == 0
+        assert ".env + .env.local" in output
+        assert "AWS_PROFILE" in output
 
     def test_it_says_when_there_is_no_env_file(self, ssm, monkeypatch):
         monkeypatch.setenv("PDUM_SSM_PATH", "/myapp/")

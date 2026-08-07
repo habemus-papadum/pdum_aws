@@ -46,7 +46,23 @@ def test_no_profile_is_ever_pinned(monkeypatch):
 
 
 def test_public_surface_is_minimal():
-    assert set(aws.__all__) == {"__version__", "client", "resource", "session", "whoami"}
+    """``load_env`` is here on purpose; everything else stays in its own module.
+
+    It is the one function a script is meant to reach for by name, in place of
+    ``dotenv.load_dotenv()`` — so it earns the short import. Its companions are
+    the report it returns and the error it raises, which a caller cannot use it
+    without.
+    """
+    assert set(aws.__all__) == {
+        "EnvReport",
+        "NoSearchPath",
+        "__version__",
+        "client",
+        "load_env",
+        "resource",
+        "session",
+        "whoami",
+    }
 
 
 def test_client_and_resource_delegate_to_the_session(monkeypatch):

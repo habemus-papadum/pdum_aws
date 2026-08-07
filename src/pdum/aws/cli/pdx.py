@@ -12,23 +12,16 @@ available but never required. The only exception is a leading ``--help``, which
 click reserves; ``pdx python --help`` still reaches Python, because parsing
 stops at the first bare word.
 
-Three layers, most specific first
----------------------------------
-1. **the environment you already have** — never overwritten, so
-   ``STRIPE_KEY=sk_test_... pdx ./run-tests`` overrides for that one run and a
-   CI job's injected variables are never undone;
-2. **the nearest ``.env``**, searched for upward from the working directory, so
-   this works from anywhere inside a project. The *whole* file is loaded, not
-   just the SSM path — a project's ``.env`` is where ``AWS_PROFILE`` and
-   ``AWS_REGION`` live too, and without those the store cannot be reached at
-   all. This is also why the file is applied *before* the store is opened;
-3. **the SSM store**, on the search path named by ``PDUM_SSM_PATH`` — which is
-   itself usually set by that ``.env``.
+The environment it hands over is built by :func:`pdum.aws.env.load_env`, in
+three layers — what you already have, the nearest ``.env`` and its
+``.env.local`` overlay, then the SSM store. That module is the place to read
+about the ordering and why it matters; this one is only the command around it,
+and a script wanting the same environment should call ``load_env`` directly
+rather than shelling out to ``pdx``.
 
 Then the process is **replaced** by the command, a real ``execvp``: same PID, so
 signals, job control, exit status and the terminal all belong to the program you
-asked for, with nothing left in the middle to forward them. It inherits the
-environment all three layers built up.
+asked for, with nothing left in the middle to forward them.
 
 ``pdx-doctor`` shows what that adds up to without running anything.
 
@@ -44,35 +37,28 @@ add_pdx_doctor(app, default_path="/acme/:/org/", envvar="ACME_SSM_PATH")
 """
 
 import os
-import re
 import sys
-from collections.abc import Callable, Mapping, MutableMapping
-from dataclasses import dataclass, field
+from collections.abc import Callable
 from typing import Any, NoReturn
 
 import typer
 from rich.console import Console
 from rich.table import Table
 
-from pdum.aws.cli.dotenv import find_env_file, read_env_file
 from pdum.aws.cli.output import DEFAULT_CONSOLE, DEFAULT_STDERR_CONSOLE, aws_errors
+from pdum.aws.env import (
+    DEFAULT_ENVVAR,
+    NoSearchPath,
+    PathDefault,
+    is_env_name,
+    load_env,
+    load_env_files,
+    no_search_path_message,
+    resolve_search_path,
+)
 from pdum.aws.secrets import SecretStore
 
-__all__ = [
-    "LoadReport",
-    "add_pdx",
-    "add_pdx_doctor",
-    "build_pdx_app",
-    "load_env_file",
-    "load_secrets",
-    "main",
-    "resolve_search_path",
-]
-
-#: Names a shell can actually use. A store may hold nested parameters, whose
-#: names carry a slash (``db/PASSWORD``); exporting one would make a variable no
-#: program could name, so it is reported and skipped instead.
-_ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+__all__ = ["add_pdx", "add_pdx_doctor", "build_pdx_app", "main"]
 
 #: Click settings that keep this command's parser off the wrapped command line.
 #: ``allow_interspersed_args`` stops option parsing at the first bare word, and
@@ -84,149 +70,6 @@ _PASSTHROUGH = {"ignore_unknown_options": True, "allow_interspersed_args": False
 #: ``pdx some-typo`` is diagnosable exactly as a bare ``some-typo`` would be.
 EXIT_NOT_FOUND = 127
 EXIT_NOT_EXECUTABLE = 126
-
-#: A search path supplied by the host: literal, deferred, or absent.
-PathDefault = str | Callable[[], str | None] | None
-
-
-@dataclass(frozen=True, slots=True)
-class LoadReport:
-    """What one layer contributed to the environment.
-
-    Attributes
-    ----------
-    source : str
-        Where the values came from, for reporting: a file path, or a search
-        path.
-    applied : list of str
-        Names this layer set.
-    already_set : list of str
-        Names it offered that the environment already had, so were kept. A more
-        specific layer had already won.
-    skipped : list of str
-        Names unusable as environment variables, e.g. a nested ``db/PASSWORD``.
-    """
-
-    source: str
-    applied: list[str] = field(default_factory=list)
-    already_set: list[str] = field(default_factory=list)
-    skipped: list[str] = field(default_factory=list)
-
-
-def _apply(values: Mapping[str, str], environ: MutableMapping[str, str], source: str) -> LoadReport:
-    """Add *values* to *environ* without disturbing what is already there."""
-    applied: list[str] = []
-    already_set: list[str] = []
-    skipped: list[str] = []
-    for name, value in sorted(values.items()):
-        if not _ENV_NAME.match(name):
-            skipped.append(name)
-        elif environ.get(name):
-            # Truthiness, not membership, to agree with SecretStore.get, where
-            # an empty variable reads as unset.
-            already_set.append(name)
-        else:
-            environ[name] = value
-            applied.append(name)
-    return LoadReport(source, applied, already_set, skipped)
-
-
-def load_env_file(env_file: str, environ: MutableMapping[str, str]) -> LoadReport | None:
-    """Apply the nearest ``.env`` to *environ*, in full.
-
-    Every variable in the file is loaded, not only the SSM search path: the file
-    is a project's environment, and the credentials for reaching the store —
-    ``AWS_PROFILE``, ``AWS_REGION`` — are ordinarily in it alongside the path.
-    Call this before opening a store, or the store may be opened against the
-    wrong account, or no account at all.
-
-    Values are interpolated, as they would be by any other ``.env`` consumer, so
-    ``BASE=${HOME}/app`` works. (``secrets import`` deliberately does not
-    interpolate; there the values are being written to permanent storage, where
-    a silently expanded ``${...}`` cannot be recovered.)
-
-    Parameters
-    ----------
-    env_file : str
-        File name to search for upward from the working directory, or a path
-        with a directory component to use as given.
-    environ : mutable mapping
-        Environment to update, normally ``os.environ``.
-
-    Returns
-    -------
-    LoadReport or None
-        What the file contributed, or ``None`` when there is no such file.
-    """
-    found = find_env_file(env_file)
-    if found is None:
-        return None
-    return _apply(read_env_file(found, interpolate=True), environ, str(found))
-
-
-def load_secrets(store: SecretStore, environ: MutableMapping[str, str]) -> LoadReport:
-    """Apply *store* to *environ*, in one bulk read, keeping what is already set.
-
-    Parameters
-    ----------
-    store : SecretStore
-        Store to read.
-    environ : mutable mapping
-        Environment to update, normally ``os.environ``.
-
-    Returns
-    -------
-    LoadReport
-        What the store contributed.
-    """
-    return _apply(store.read_all(), environ, ":".join(store.prefixes))
-
-
-def resolve_search_path(
-    *,
-    envvar: str | None,
-    default_path: PathDefault,
-    environ: Mapping[str, str],
-    env_file_report: LoadReport | None = None,
-) -> tuple[str | None, str]:
-    """Work out which SSM search path to use, and say where it came from.
-
-    Call after :func:`load_env_file`, so that a path set by the file is already
-    in *environ* and needs no separate lookup — it is one environment variable
-    among all the others by this point. *env_file_report* is used only to
-    describe the source precisely.
-
-    Parameters
-    ----------
-    envvar : str, optional
-        Variable holding the path. ``None`` leaves only *default_path*.
-    default_path : str or callable, optional
-        Fallback when the environment has none; a callable is resolved here.
-    environ : mapping
-        Environment to consult, normally ``os.environ``.
-    env_file_report : LoadReport, optional
-        Result of :func:`load_env_file`, to tell a path that came from the file
-        from one that was already exported.
-
-    Returns
-    -------
-    tuple of (str or None, str)
-        The path, and a short description of its source for reporting.
-    """
-    if envvar and environ.get(envvar):
-        if env_file_report is not None and envvar in env_file_report.applied:
-            return environ[envvar], env_file_report.source
-        return environ[envvar], f"${envvar}"
-    resolved = default_path() if callable(default_path) else default_path
-    return (resolved, "built-in default") if resolved else (None, "")
-
-
-def _no_path_message(envvar: str | None, env_file: str, found: LoadReport | None) -> str:
-    """Explain every way the search path could have been supplied."""
-    if not envvar:
-        return "[red]no SSM search path configured:[/] this command was built without one"
-    where = f"add {envvar}= to {found.source}" if found else f"add {envvar}= to a {env_file} in this project"
-    return f"[red]no SSM search path configured:[/] set {envvar}, or {where}"
 
 
 def _exec(argv: list[str], console: Console) -> NoReturn:
@@ -261,7 +104,7 @@ def add_pdx(
     *,
     console: Console | None = None,
     default_path: PathDefault = None,
-    envvar: str | None = "PDUM_SSM_PATH",
+    envvar: str | None = DEFAULT_ENVVAR,
     env_file: str = ".env",
     store_factory: Callable[[str], SecretStore] = SecretStore,
     name: str = "pdx",
@@ -283,8 +126,9 @@ def add_pdx(
         Environment variable holding the search path. ``None`` leaves only
         *default_path*; the ``.env`` is still loaded either way.
     env_file : str, default ".env"
-        File searched for upward from the working directory. A name with a
-        directory component is used as given.
+        File searched for upward from the working directory, and the base name
+        of the ``.local`` overlay beside it. A name with a directory component
+        is used as given.
     store_factory : callable, default :class:`~pdum.aws.secrets.SecretStore`
         Called with the resolved path to build the store.
     name : str, default "pdx"
@@ -306,20 +150,12 @@ def add_pdx(
             out.print("[red]nothing to run:[/] pdx takes the command to exec, e.g. [bold]pdx npm start[/]")
             raise typer.Exit(2)
 
-        from_file = load_env_file(env_file, os.environ)
-        path, _ = resolve_search_path(
-            envvar=envvar, default_path=default_path, environ=os.environ, env_file_report=from_file
-        )
-        if not path:
-            out.print(_no_path_message(envvar, env_file, from_file))
-            raise typer.Exit(2)
         try:
-            store = store_factory(path)
-        except ValueError as exc:
+            load_env(env_file=env_file, envvar=envvar, default_path=default_path, store_factory=store_factory)
+        except (NoSearchPath, ValueError) as exc:
             out.print(f"[red]{exc}[/]")
             raise typer.Exit(2) from exc
 
-        load_secrets(store, os.environ)
         _exec(argv, out)
 
 
@@ -328,7 +164,7 @@ def add_pdx_doctor(
     *,
     console: Console | None = None,
     default_path: PathDefault = None,
-    envvar: str | None = "PDUM_SSM_PATH",
+    envvar: str | None = DEFAULT_ENVVAR,
     env_file: str = ".env",
     store_factory: Callable[[str], SecretStore] = SecretStore,
     name: str = "pdx-doctor",
@@ -356,7 +192,7 @@ def add_pdx_doctor(
     @app.command(name)
     def pdx_doctor() -> None:
         """Explain what pdx would put in the environment, without running anything."""
-        from_file = load_env_file(env_file, os.environ)
+        from_file = load_env_files(env_file, os.environ)
         if from_file is None:
             out.print(f"[dim]no {env_file} found in this directory or above it[/]")
         else:
@@ -369,7 +205,7 @@ def add_pdx_doctor(
             envvar=envvar, default_path=default_path, environ=os.environ, env_file_report=from_file
         )
         if not path:
-            out.print(_no_path_message(envvar, env_file, from_file))
+            out.print(f"[red]{no_search_path_message(envvar, env_file, from_file)}[/]")
             raise typer.Exit(2)
         out.print(f"[bold]search path[/] {path}  [dim](from {source})[/]")
         try:
@@ -390,7 +226,7 @@ def add_pdx_doctor(
         counts = {"set it": 0, "keep the environment's": 0, "skip it": 0}
         for row in rows:
             secret = row["name"]
-            if not _ENV_NAME.match(secret):
+            if not is_env_name(secret):
                 verdict, style = "skip it", "yellow"
             elif os.environ.get(secret):
                 verdict, style = "keep the environment's", "cyan"

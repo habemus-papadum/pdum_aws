@@ -34,10 +34,11 @@ store.put("STRIPE_KEY", "sk_live_...")   # written to /myapp/STRIPE_KEY
 store.get("GOOGLE_CLIENT_ID")            # found at /org/GOOGLE_CLIENT_ID
 ```
 
-This module does not read ``.env`` files. Env-first resolution looks at
-``os.environ`` only; if you want ``.env`` support, call ``python-dotenv``
-yourself before reading, which keeps that dependency and its import-time
-filesystem access out of this library.
+This module does not read ``.env`` files, and nothing here touches the
+filesystem as a side effect of being imported. Env-first resolution looks at
+``os.environ`` only. When you want the ``.env`` layer too, call
+:func:`pdum.aws.env.load_env` explicitly — it applies the files and then this
+store, in that order, and returns a report of what each contributed.
 """
 
 import json

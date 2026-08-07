@@ -61,6 +61,35 @@ store.get("GOOGLE_CLIENT_ID")            # falls back to /org/GOOGLE_CLIENT_ID
 store.names()                            # union across layers, deduplicated
 ```
 
+### The project environment, from a script
+
+`load_env()` builds the same environment `pdx` would hand a command, for a
+script that was not launched under it. Use it where you would otherwise call
+`dotenv.load_dotenv()`:
+
+```python
+from pdum.aws import load_env
+
+load_env()   # os.environ now carries the project's variables and its secrets
+```
+
+It does strictly more than `load_dotenv`: the same `.env` handling, plus the
+`.env.local` overlay, plus the secrets on the SSM search path that the `.env`
+usually names. Three layers, most specific first — what is already set, then the
+files, then the store — with the files applied *before* the store is opened,
+because that is where `AWS_PROFILE` lives.
+
+Nothing runs on import; you decide when. The call returns a report of what each
+layer contributed, raises `NoSearchPath` rather than quietly skipping the
+secrets, and takes `environ=` if you want an environment computed without
+touching this process's own:
+
+```python
+report = load_env(environ={})            # nothing is applied to os.environ
+report.secrets.applied                   # ['API_KEY', 'DATABASE_URL']
+report.env_files.already_set             # names the caller had already set
+```
+
 ### Service quotas
 
 A fresh AWS account can launch almost nothing — typically 5 vCPUs of standard
@@ -161,8 +190,9 @@ most specific first:
 1. **the environment you already have** — never overwritten, so
    `STRIPE_KEY=sk_test_... pdx ./run-tests` overrides for that one run, and a CI
    job's injected variables are never undone;
-2. **the nearest `.env`**, searched for upward from the working directory, so
-   `pdx` works from anywhere inside a project;
+2. **the nearest `.env`, overlaid with an adjacent `.env.local`**, searched for
+   upward from the working directory, so `pdx` works from anywhere inside a
+   project;
 3. **the SSM store**, on the search path named by `PDUM_SSM_PATH`.
 
 The *whole* `.env` is loaded, not just the search path — and it is applied
@@ -170,11 +200,23 @@ before the store is opened, because that is where the credentials for reaching
 the store live:
 
 ```ini
-# .env, at the top of the project
-AWS_PROFILE=my-account
+# .env, at the top of the project — committed
+AWS_PROFILE=team-account
 AWS_REGION=us-east-1
 PDUM_SSM_PATH=/myapp/:/org/
 ```
+
+```ini
+# .env.local, beside it — gitignored, yours alone
+AWS_PROFILE=my-sandbox
+```
+
+Only `.env` is searched for; the overlay is taken from *beside* whatever was
+found, never searched for separately, so one directory always wins and there is
+never a question of which `.env.local` applies. A `.env.local` with no `.env` to
+anchor it is therefore ignored. The two are parsed as one document rather than
+merged as two, so `BUCKET=assets-${STAGE}` in the local file can refer to a
+`STAGE` defined in the committed one.
 
 Values are interpolated, as any other `.env` consumer would, so `BUCKET=assets-${STAGE}`
 works. (`secrets import` deliberately does *not* interpolate: those values are
@@ -190,11 +232,15 @@ so signals, job control, exit status and the terminal belong to it directly,
 with nothing left in the middle to forward them. It inherits the environment all
 three layers built up.
 
+`pdx` is a thin command around [`load_env()`](#the-project-environment-from-a-script) —
+a Python script wanting the same environment should call that directly rather
+than shelling out.
+
 `pdx-doctor` shows what that adds up to without running anything:
 
 ```console
 $ pdum-aws pdx-doctor
-.env /work/myapp/.env
+.env /work/myapp/.env + .env.local
   sets AWS_PROFILE, AWS_REGION, PDUM_SSM_PATH
   kept from the environment SHARED
 search path /myapp/:/org/  (from /work/myapp/.env)

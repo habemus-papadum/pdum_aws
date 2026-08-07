@@ -14,6 +14,10 @@
 
 ::: pdum.aws.secrets
 
+## pdum.aws.env
+
+::: pdum.aws.env
+
 ## pdum.aws.quotas
 
 ::: pdum.aws.quotas
@@ -40,9 +44,6 @@
 
 ::: pdum.aws.cli.identity
 
-## pdum.aws.cli.dotenv
-
-::: pdum.aws.cli.dotenv
 
 ## pdum.aws.cli.output
 

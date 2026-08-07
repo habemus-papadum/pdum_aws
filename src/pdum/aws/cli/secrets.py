@@ -38,8 +38,8 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from pdum.aws.cli.dotenv import read_env_file
 from pdum.aws.cli.output import DEFAULT_CONSOLE, emit
+from pdum.aws.env import read_env_file
 from pdum.aws.secrets import SecretStore
 
 __all__ = ["SKIP_ON_IMPORT", "STORE_KEY", "build_secrets_app", "store_from"]
