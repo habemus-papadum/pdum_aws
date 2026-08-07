@@ -118,20 +118,29 @@ class FakeSsmClient:
         self.deleted.append(Name)
         return {}
 
-    def get_paginator(self, name: str) -> _Paginator:
+    def get_paginator(self, name: str) -> "_SsmByPathPaginator":
         assert name == "get_parameters_by_path"
-        return _Paginator(
-            [
-                {
-                    "Parameters": [
-                        {
-                            "Name": path,
-                            "Type": self.types.get(path, "SecureString"),
-                            "Version": 1,
-                            "LastModifiedDate": datetime(2026, 8, 5, 12, 0, tzinfo=UTC),
-                        }
-                        for path in sorted(self.parameters)
-                    ]
-                }
-            ]
-        )
+        return _SsmByPathPaginator(self)
+
+
+class _SsmByPathPaginator:
+    """Honours the ``Path`` filter, as the real by-path API does server-side."""
+
+    def __init__(self, ssm: FakeSsmClient) -> None:
+        self._ssm = ssm
+
+    def paginate(self, Path: str, **_kwargs: Any) -> list[dict[str, Any]]:  # noqa: N803
+        return [
+            {
+                "Parameters": [
+                    {
+                        "Name": path,
+                        "Type": self._ssm.types.get(path, "SecureString"),
+                        "Version": 1,
+                        "LastModifiedDate": datetime(2026, 8, 5, 12, 0, tzinfo=UTC),
+                    }
+                    for path in sorted(self._ssm.parameters)
+                    if path.startswith(Path)
+                ]
+            }
+        ]

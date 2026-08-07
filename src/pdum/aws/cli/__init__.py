@@ -2,7 +2,7 @@
 
 ```console
 $ pdum-aws whoami
-$ pdum-aws secrets --prefix /myapp/ list
+$ pdum-aws secrets --path /myapp/ list
 $ pdum-aws quotas status --region us-east-1
 ```
 
@@ -14,15 +14,16 @@ this behaves like every other AWS tool on the box.
 $ AWS_PROFILE=my-account pdum-aws quotas status
 ```
 
-The secrets commands need a prefix, which has no default. Pass ``--prefix`` or
-set ``PDUM_SSM_PREFIX`` once in your shell.
+The secrets commands need a search path — one or more SSM prefixes, colon-
+separated, most specific first — which has no default. Pass ``--path`` or set
+``PDUM_SSM_PATH`` once in your shell.
 
 Embedding these commands elsewhere
 ----------------------------------
 Every group here is produced by a factory, so another application can mount the
 same commands under its own name, carrying its own defaults and rendering
 through its own console. That is the supported way to give an application a
-``secrets`` subcommand without asking its users to type a prefix:
+``secrets`` subcommand without asking its users to type a search path:
 
 ```python
 import typer
@@ -34,7 +35,7 @@ console = Console()
 app = typer.Typer()
 add_whoami(app, console=console)
 app.add_typer(
-    build_secrets_app(console=console, default_prefix="/acme/", envvar="ACME_SSM_PREFIX"),
+    build_secrets_app(console=console, default_path="/acme/:/org/", envvar="ACME_SSM_PATH"),
     name="secrets",
 )
 app.add_typer(

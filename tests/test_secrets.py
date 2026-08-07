@@ -1,7 +1,8 @@
 """Tests for the SSM-backed secret store.
 
-These exercise everything that does not require AWS credentials: prefix
-handling, env-first resolution, and the laziness of client construction.
+These exercise everything that does not require AWS credentials: search-path
+handling, env-first resolution, layered fallback, and the laziness of client
+construction.
 """
 
 import pytest
@@ -11,28 +12,43 @@ from pdum.aws.secrets import SecretStore
 from tests.fakes import FakeSsmClient, client_error
 
 
-class TestPrefix:
-    """The prefix is required and normalised."""
+class TestPath:
+    """The search path is required and normalised, element by element."""
 
     @pytest.mark.parametrize("given", ["myapp", "/myapp", "myapp/", "/myapp/", "  /myapp/  "])
     def test_normalises_to_slashed_form(self, given):
-        assert SecretStore(given).prefix == "/myapp/"
+        assert SecretStore(given).prefixes == ("/myapp/",)
 
     def test_nested_prefix_is_preserved(self):
-        assert SecretStore("myapp/prod").prefix == "/myapp/prod/"
+        assert SecretStore("myapp/prod").prefixes == ("/myapp/prod/",)
 
-    @pytest.mark.parametrize("given", ["", "   ", "/", "//"])
+    def test_colon_separates_layers(self):
+        assert SecretStore("/myapp/:/org/").prefixes == ("/myapp/", "/org/")
+
+    def test_a_sequence_works_too(self):
+        assert SecretStore(["myapp", "org"]).prefixes == ("/myapp/", "/org/")
+
+    def test_duplicate_layers_collapse_to_the_first(self):
+        assert SecretStore("/myapp/:myapp:/org/").prefixes == ("/myapp/", "/org/")
+
+    def test_stray_colons_are_ignored(self):
+        assert SecretStore(":/myapp/:").prefixes == ("/myapp/",)
+
+    @pytest.mark.parametrize("given", ["", "   ", "/", "//", "/myapp/:/", []])
     def test_root_or_empty_is_rejected(self, given):
         # A root prefix would enumerate every parameter in the account, so it is
         # refused rather than silently spanning other applications' secrets.
-        with pytest.raises(ValueError, match="non-root prefix"):
+        with pytest.raises(ValueError, match="prefix|search path"):
             SecretStore(given)
 
-    def test_path_joins_prefix_and_name(self):
-        assert SecretStore("/myapp/").path("STRIPE_KEY") == "/myapp/STRIPE_KEY"
+    def test_prefix_is_the_write_layer(self):
+        assert SecretStore("/myapp/:/org/").prefix == "/myapp/"
 
-    def test_repr_shows_prefix(self):
-        assert repr(SecretStore("/myapp/")) == "SecretStore(prefix='/myapp/')"
+    def test_path_joins_write_layer_and_name(self):
+        assert SecretStore("/myapp/:/org/").path("STRIPE_KEY") == "/myapp/STRIPE_KEY"
+
+    def test_repr_shows_the_path(self):
+        assert repr(SecretStore("/myapp/:/org/")) == "SecretStore(path='/myapp/:/org/')"
 
 
 class TestEnvFirst:
@@ -62,10 +78,10 @@ class TestMissingSecrets:
         store._cache["ABSENT"] = None
         assert store.get("ABSENT", default="fallback") == "fallback"
 
-    def test_required_raises_keyerror_naming_the_path(self):
-        store = SecretStore("/myapp/")
+    def test_required_raises_keyerror_naming_every_searched_path(self):
+        store = SecretStore("/myapp/:/org/")
         store._cache["ABSENT"] = None
-        with pytest.raises(KeyError, match="/myapp/ABSENT"):
+        with pytest.raises(KeyError, match="/myapp/ABSENT.*(/org/ABSENT)"):
             store.get("ABSENT", required=True)
 
     def test_get_json_parses_and_defaults(self):
@@ -144,6 +160,10 @@ class TestAgainstSsm:
         assert "/myapp/EXISTING" not in store._ssm.parameters
         assert "EXISTING" not in store._cache
 
+    def test_delete_of_a_missing_name_raises_keyerror(self, store):
+        with pytest.raises(KeyError, match="not found"):
+            store.delete("NOPE")
+
     def test_names_strips_the_prefix(self, store):
         store.put("B", "2")
         store.put("A", "1")
@@ -153,4 +173,62 @@ class TestAgainstSsm:
         rows = {r["name"]: r for r in store.describe()}
         assert rows["EXISTING"]["type"] == "SecureString"
         assert rows["EXISTING"]["version"] == 1
+        assert rows["EXISTING"]["origin"] == "/myapp/"
+        assert rows["EXISTING"]["shadowed"] is False
         assert "value" not in rows["EXISTING"]
+
+
+class TestLayeredResolution:
+    """Reads fall back along the path; writes and deletes touch only the first."""
+
+    @pytest.fixture
+    def store(self, monkeypatch):
+        fake = FakeSsmClient(
+            {
+                "/myapp/OWN": "project-value",
+                "/myapp/BOTH": "project-wins",
+                "/org/BOTH": "org-loses",
+                "/org/SHARED": "org-value",
+            }
+        )
+        s = SecretStore("/myapp/:/org/")
+        monkeypatch.setattr(s, "_ssm", fake)
+        for name in ("OWN", "BOTH", "SHARED", "NOPE"):
+            monkeypatch.delenv(name, raising=False)
+        return s
+
+    def test_a_project_secret_resolves_from_the_first_layer(self, store):
+        assert store.get("OWN") == "project-value"
+
+    def test_a_shared_secret_falls_back(self, store):
+        assert store.get("SHARED") == "org-value"
+
+    def test_the_first_layer_shadows_later_ones(self, store):
+        assert store.get("BOTH") == "project-wins"
+
+    def test_absent_everywhere_still_defaults(self, store):
+        assert store.get("NOPE", default="fallback") == "fallback"
+
+    def test_put_writes_only_the_first_layer(self, store):
+        store.put("SHARED", "override")
+        assert store._ssm.parameters["/myapp/SHARED"] == "override"
+        assert store._ssm.parameters["/org/SHARED"] == "org-value"
+
+    def test_delete_never_reaches_into_a_fallback_layer(self, store):
+        with pytest.raises(KeyError, match="/org/SHARED"):
+            store.delete("SHARED")
+        assert "/org/SHARED" in store._ssm.parameters
+
+    def test_delete_removes_an_override_and_uncovers_the_fallback(self, store):
+        store.delete("BOTH")
+        assert "/myapp/BOTH" not in store._ssm.parameters
+        assert store.get("BOTH") == "org-loses"
+
+    def test_names_dedupes_across_layers(self, store):
+        assert sorted(store.names()) == ["BOTH", "OWN", "SHARED"]
+
+    def test_describe_reports_origin_and_shadowing(self, store):
+        rows = {(r["name"], r["origin"]): r for r in store.describe()}
+        assert rows[("SHARED", "/org/")]["shadowed"] is False
+        assert rows[("BOTH", "/myapp/")]["shadowed"] is False
+        assert rows[("BOTH", "/org/")]["shadowed"] is True

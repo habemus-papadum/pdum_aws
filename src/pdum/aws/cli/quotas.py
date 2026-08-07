@@ -3,8 +3,8 @@
 :func:`build_quotas_app` mirrors :func:`~pdum.aws.cli.secrets.build_secrets_app`:
 a fresh :class:`typer.Typer` per call, rendering through a console the host
 supplies, with the defaults its users should not have to type. Where the secrets
-group needs a prefix, this one needs a service code, a target plan and a set of
-regions:
+group needs a search path, this one needs a service code, a target plan and a
+set of regions:
 
 ```python
 import typer

@@ -39,14 +39,14 @@ def _stable_console(monkeypatch):
 
     Two independent sources of flakiness:
 
-    * ``PDUM_SSM_PREFIX`` would satisfy a prefix a test meant to omit.
+    * ``PDUM_SSM_PATH`` would satisfy a search path a test meant to omit.
     * A narrow terminal wraps table cells mid-word, so ``case-L-BBB`` renders as
       ``case-L…``. Setting ``COLUMNS`` here would be too late — rich reads it
       **once, when the Console is constructed**, which happens when
       :mod:`pdum.aws.cli` is imported. The width has to be pushed onto the live
       Console object instead.
     """
-    monkeypatch.delenv("PDUM_SSM_PREFIX", raising=False)
+    monkeypatch.delenv("PDUM_SSM_PATH", raising=False)
     monkeypatch.setattr(cli.console, "width", 200)
 
 
@@ -93,26 +93,26 @@ class TestTopLevel:
         assert "123456789012" in plain(result)
 
 
-class TestSecretsPrefix:
-    def test_prefix_is_required(self):
+class TestSecretsPath:
+    def test_path_is_required(self):
         result = runner.invoke(app, ["secrets", "list"])
         assert result.exit_code != 0
 
-    def test_prefix_can_come_from_the_environment(self, ssm, monkeypatch):
-        monkeypatch.setenv("PDUM_SSM_PREFIX", "/myapp/")
+    def test_path_can_come_from_the_environment(self, ssm, monkeypatch):
+        monkeypatch.setenv("PDUM_SSM_PATH", "/myapp/")
         result = runner.invoke(app, ["secrets", "list"])
         assert result.exit_code == 0
         assert "API_KEY" in plain(result)
 
     def test_a_root_prefix_is_refused_with_a_readable_message(self):
-        result = runner.invoke(app, ["secrets", "--prefix", "/", "list"])
+        result = runner.invoke(app, ["secrets", "--path", "/", "list"])
         assert result.exit_code == 2
         assert "non-root prefix" in plain(result)
 
 
 class TestSecretsCommands:
     def invoke(self, *args):
-        return runner.invoke(app, ["secrets", "--prefix", "/myapp/", *args])
+        return runner.invoke(app, ["secrets", "--path", "/myapp/", *args])
 
     def test_list(self, ssm):
         result = self.invoke("list")
@@ -148,18 +148,18 @@ class TestSecretsCommands:
         assert ssm.types["/myapp/NEW"] == "String"
 
     def test_set_refuses_an_empty_value(self, ssm):
-        result = runner.invoke(app, ["secrets", "--prefix", "/myapp/", "set", "EMPTY", "-"], input="")
+        result = runner.invoke(app, ["secrets", "--path", "/myapp/", "set", "EMPTY", "-"], input="")
         assert result.exit_code == 1
         assert "empty" in plain(result)
         assert "/myapp/EMPTY" not in ssm.parameters
 
     def test_set_reads_stdin(self, ssm):
-        result = runner.invoke(app, ["secrets", "--prefix", "/myapp/", "set", "PIPED", "-"], input="from-stdin\n")
+        result = runner.invoke(app, ["secrets", "--path", "/myapp/", "set", "PIPED", "-"], input="from-stdin\n")
         assert result.exit_code == 0
         assert ssm.parameters["/myapp/PIPED"] == "from-stdin"
 
     def test_rm_requires_confirmation(self, ssm):
-        result = runner.invoke(app, ["secrets", "--prefix", "/myapp/", "rm", "API_KEY"], input="n\n")
+        result = runner.invoke(app, ["secrets", "--path", "/myapp/", "rm", "API_KEY"], input="n\n")
         assert result.exit_code != 0
         assert "/myapp/API_KEY" in ssm.parameters
 
@@ -186,7 +186,7 @@ class TestSecretsImport:
             tmp_path,
             "# comment\nAPI_KEY=abc\nAWS_ACCESS_KEY_ID=AKIAnope\nAWS_PROFILE=whatever\nEMPTY=\nQUOTED='q'\n",
         )
-        result = runner.invoke(app, ["secrets", "--prefix", "/myapp/", "import", str(path)])
+        result = runner.invoke(app, ["secrets", "--path", "/myapp/", "import", str(path)])
         assert result.exit_code == 0
         # Credentials needed to *reach* the store must never be pushed into it.
         assert "/myapp/AWS_ACCESS_KEY_ID" not in ssm.parameters
@@ -197,13 +197,13 @@ class TestSecretsImport:
 
     def test_dry_run_writes_nothing(self, ssm, tmp_path):
         path = self.write(tmp_path, "BRAND_NEW=1\n")
-        result = runner.invoke(app, ["secrets", "--prefix", "/myapp/", "import", str(path), "--dry-run"])
+        result = runner.invoke(app, ["secrets", "--path", "/myapp/", "import", str(path), "--dry-run"])
         assert result.exit_code == 0
         assert "would import" in plain(result)
         assert "/myapp/BRAND_NEW" not in ssm.parameters
 
     def test_missing_file_exits_nonzero(self, ssm, tmp_path):
-        result = runner.invoke(app, ["secrets", "--prefix", "/myapp/", "import", str(tmp_path / "absent")])
+        result = runner.invoke(app, ["secrets", "--path", "/myapp/", "import", str(tmp_path / "absent")])
         assert result.exit_code == 1
         assert "no such file" in plain(result)
 

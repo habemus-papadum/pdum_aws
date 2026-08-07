@@ -2,8 +2,8 @@
 
 :func:`build_secrets_app` returns a fresh :class:`typer.Typer` each call, so a
 host CLI can mount these commands under its own name, render them through its
-own console, and — the point of the exercise — supply the SSM prefix its users
-should not have to type:
+own console, and — the point of the exercise — supply the SSM search path its
+users should not have to type:
 
 ```python
 import typer
@@ -11,20 +11,22 @@ import typer
 from pdum.aws.cli import build_secrets_app
 
 app = typer.Typer()
-app.add_typer(build_secrets_app(default_prefix="/acme/", envvar="ACME_SSM_PREFIX"), name="secrets")
+app.add_typer(build_secrets_app(default_path="/acme/:/org/", envvar="ACME_SSM_PATH"), name="secrets")
 ```
 
-``acme secrets list`` now works bare. The prefix resolves in this order:
+``acme secrets list`` now works bare. The search path resolves in this order:
 
-1. ``--prefix`` on the command line;
+1. ``--path`` on the command line;
 2. the environment variable named by *envvar*;
-3. *default_prefix*, which may be a callable when the host reads it from a
+3. *default_path*, which may be a callable when the host reads it from a
    config file and wants that read deferred to invocation time;
 4. otherwise an error — the library itself ships no default, because a shared
    one would let unrelated projects collide in one namespace.
 
-Pass ``expose_prefix_option=False`` to drop the flag entirely and pin the
-namespace to *default_prefix*.
+A path is one or more SSM prefixes, colon-separated, most specific first —
+reads fall back along it, writes and deletes target the first prefix only
+(see :mod:`pdum.aws.secrets`). Pass ``expose_path_option=False`` to drop the
+flag entirely and pin the namespace to *default_path*.
 """
 
 import sys
@@ -61,15 +63,15 @@ SKIP_ON_IMPORT = frozenset(
     }
 )
 
-#: A prefix supplied by the host: literal, deferred, or absent.
-PrefixDefault = str | Callable[[], str | None] | None
+#: A search path supplied by the host: literal, deferred, or absent.
+PathDefault = str | Callable[[], str | None] | None
 
 
 def store_from(ctx: typer.Context) -> SecretStore:
     """Return the store this invocation resolved.
 
     Useful to host applications adding their own commands to a group built by
-    :func:`build_secrets_app`, which then read the same prefix as the rest.
+    :func:`build_secrets_app`, which then read the same search path as the rest.
 
     Parameters
     ----------
@@ -84,8 +86,8 @@ def store_from(ctx: typer.Context) -> SecretStore:
     return ctx.meta[STORE_KEY]
 
 
-def _flag_default(default_prefix: PrefixDefault) -> Any:
-    """Default for the ``--prefix`` option itself.
+def _flag_default(default_path: PathDefault) -> Any:
+    """Default for the ``--path`` option itself.
 
     With no host default the option stays *required*, which keeps Click's own
     "Missing option" error and the ``[required]`` marker in ``--help`` — an
@@ -93,34 +95,43 @@ def _flag_default(default_prefix: PrefixDefault) -> Any:
     straight through so ``--help`` shows it. A callable cannot be rendered into
     help, so the option becomes optional and resolution happens at call time.
     """
-    if default_prefix is None:
+    if default_path is None:
         return ...
-    return None if callable(default_prefix) else default_prefix
+    return None if callable(default_path) else default_path
 
 
-def _describe_table(rows: list[dict[str, Any]]) -> Table:
-    """Render ``SecretStore.describe`` output as a table."""
+def _describe_table(rows: list[dict[str, Any]], *, show_origin: bool) -> Table:
+    """Render ``SecretStore.describe`` output as a table.
+
+    Shadowed rows — reachable layers a more specific one hides — render dim,
+    so the listing shows both what resolves and what it eclipses.
+    """
     table = Table(box=None, pad_edge=False)
     table.add_column("NAME", style="bold")
     table.add_column("TYPE")
     table.add_column("VER", justify="right")
     table.add_column("MODIFIED")
+    if show_origin:
+        table.add_column("ORIGIN")
     for row in rows:
-        table.add_row(
+        cells = [
             row["name"],
             "secure" if row["type"] == "SecureString" else "plain",
             str(row["version"]),
             row["modified"].strftime("%Y-%m-%d %H:%M"),
-        )
+        ]
+        if show_origin:
+            cells.append(row["origin"] + (" (shadowed)" if row["shadowed"] else ""))
+        table.add_row(*cells, style="dim" if row["shadowed"] else None)
     return table
 
 
 def build_secrets_app(
     *,
     console: Console | None = None,
-    default_prefix: PrefixDefault = None,
-    envvar: str | None = "PDUM_SSM_PREFIX",
-    expose_prefix_option: bool = True,
+    default_path: PathDefault = None,
+    envvar: str | None = "PDUM_SSM_PATH",
+    expose_path_option: bool = True,
     store_factory: Callable[[str], SecretStore] = SecretStore,
     help: str = "Manage secrets in AWS SSM Parameter Store.",
 ) -> typer.Typer:
@@ -131,21 +142,21 @@ def build_secrets_app(
     console : rich.console.Console, optional
         Console every command in the group renders through; defaults to
         :data:`~pdum.aws.cli.output.DEFAULT_CONSOLE`.
-    default_prefix : str or callable, optional
-        SSM prefix to use when neither the flag nor the environment supplies
-        one. Pass a zero-argument callable to defer resolving it — a host
-        reading the prefix from a config file wants that read to happen on
+    default_path : str or callable, optional
+        SSM search path to use when neither the flag nor the environment
+        supplies one. Pass a zero-argument callable to defer resolving it — a
+        host reading the path from a config file wants that read to happen on
         invocation, not on import.
     envvar : str, optional
-        Environment variable consulted before *default_prefix*. Pass ``None``
+        Environment variable consulted before *default_path*. Pass ``None``
         to disable environment lookup entirely.
-    expose_prefix_option : bool, default True
-        Whether to offer ``--prefix``. ``False`` removes the flag, pinning the
-        group to *default_prefix*.
+    expose_path_option : bool, default True
+        Whether to offer ``--path``. ``False`` removes the flag, pinning the
+        group to *default_path*.
     store_factory : callable, default :class:`~pdum.aws.secrets.SecretStore`
-        Called with the resolved prefix to build the store. Override to thread
+        Called with the resolved path to build the store. Override to thread
         host configuration through, e.g.
-        ``lambda prefix: SecretStore(prefix, region=cfg.region)``.
+        ``lambda path: SecretStore(path, region=cfg.region)``.
     help : str
         Group help text.
 
@@ -157,35 +168,35 @@ def build_secrets_app(
     out = console or DEFAULT_CONSOLE
     app = typer.Typer(help=help, no_args_is_help=True)
 
-    def configure(ctx: typer.Context, prefix: str | None) -> None:
-        """Resolve the prefix and put the store where subcommands find it."""
-        if not prefix:
-            prefix = default_prefix() if callable(default_prefix) else default_prefix
-        if not prefix:
+    def configure(ctx: typer.Context, path: str | None) -> None:
+        """Resolve the search path and put the store where subcommands find it."""
+        if not path:
+            path = default_path() if callable(default_path) else default_path
+        if not path:
             source = f" or set {envvar}" if envvar else ""
-            out.print(f"[red]no SSM prefix configured: pass --prefix{source}[/]")
+            out.print(f"[red]no SSM search path configured: pass --path{source}[/]")
             raise typer.Exit(2)
         try:
-            ctx.meta[STORE_KEY] = store_factory(prefix)
+            ctx.meta[STORE_KEY] = store_factory(path)
         except ValueError as exc:
             out.print(f"[red]{exc}[/]")
             raise typer.Exit(2) from exc
 
-    if expose_prefix_option:
+    if expose_path_option:
 
         @app.callback()
         def _configure(
             ctx: typer.Context,
-            prefix: str = typer.Option(
-                _flag_default(default_prefix),
-                "--prefix",
+            path: str = typer.Option(
+                _flag_default(default_path),
+                "--path",
                 "-p",
                 envvar=envvar,
-                help="SSM path prefix owning these secrets, e.g. /myapp/",
+                help="SSM search path: colon-separated prefixes, most specific first, e.g. /myapp/:/org/",
             ),
         ) -> None:
             """Build the store every secrets subcommand works against."""
-            configure(ctx, prefix)
+            configure(ctx, path)
 
     else:
 
@@ -197,24 +208,24 @@ def build_secrets_app(
     @app.command("list")
     def secrets_list(
         ctx: typer.Context,
-        long: bool = typer.Option(False, "--long", "-l", help="show type, version and last-modified"),
+        long: bool = typer.Option(False, "--long", "-l", help="show type, version, last-modified and origin"),
     ) -> None:
-        """List secret names in the store."""
+        """List secret names visible on the search path."""
         store = store_from(ctx)
         if not long:
             for name in sorted(store.names()):
                 emit(out, name)
             return
 
-        rows = sorted(store.describe(), key=lambda r: r["name"])
+        rows = sorted(store.describe(), key=lambda r: (r["name"], r["shadowed"]))
         if not rows:
-            out.print(f"[yellow]no secrets under {store.prefix}[/]")
+            out.print(f"[yellow]no secrets under {':'.join(store.prefixes)}[/]")
             return
-        out.print(_describe_table(rows))
+        out.print(_describe_table(rows, show_origin=len(store.prefixes) > 1))
 
     @app.command("get")
     def secrets_get(
-        ctx: typer.Context, name: str = typer.Argument(..., help="secret name, without the prefix")
+        ctx: typer.Context, name: str = typer.Argument(..., help="secret name, without any prefix")
     ) -> None:
         """Print one secret's value to stdout, verbatim."""
         store = store_from(ctx)
@@ -231,7 +242,7 @@ def build_secrets_app(
         value: str = typer.Argument(None, help="value; omit or pass '-' to read stdin"),
         plain: bool = typer.Option(False, "--plain", help="store as String rather than SecureString"),
     ) -> None:
-        """Set a secret, taking the value from the argument or stdin.
+        """Set a secret in the first prefix, taking the value from the argument or stdin.
 
         Prefer stdin: a value passed as an argument lands in your shell history.
         """
@@ -250,11 +261,19 @@ def build_secrets_app(
         name: str = typer.Argument(...),
         yes: bool = typer.Option(False, "--yes", "-y", help="skip the confirmation prompt"),
     ) -> None:
-        """Delete a secret from the store."""
+        """Delete a secret from the first prefix.
+
+        A secret living only in a fallback layer is refused, naming where it
+        is: deleting from a shared layer takes an explicit ``--path`` there.
+        """
         store = store_from(ctx)
         if not yes:
             typer.confirm(f"delete {store.path(name)}?", abort=True)
-        store.delete(name)
+        try:
+            store.delete(name)
+        except KeyError as exc:
+            out.print(f"[red]{exc.args[0]}[/]")
+            raise typer.Exit(1) from exc
         out.print(f"[green]deleted[/] {store.path(name)}")
 
     @app.command("import")
@@ -263,7 +282,7 @@ def build_secrets_app(
         path: Path = typer.Argument(Path(".secrets"), help="a KEY=VALUE file"),
         dry_run: bool = typer.Option(False, "--dry-run", help="show what would be pushed, write nothing"),
     ) -> None:
-        """Push secrets from a KEY=VALUE file into SSM.
+        """Push secrets from a KEY=VALUE file into the first prefix.
 
         AWS bootstrap keys are skipped; see :data:`SKIP_ON_IMPORT`.
         """
@@ -297,7 +316,7 @@ def build_secrets_app(
 
     @app.command("export")
     def secrets_export(ctx: typer.Context) -> None:
-        """Print every secret as KEY=VALUE lines."""
+        """Print every visible secret as KEY=VALUE lines, resolved along the path."""
         store = store_from(ctx)
         for name in sorted(store.names()):
             emit(out, f"{name}={store.get(name, required=True)}")

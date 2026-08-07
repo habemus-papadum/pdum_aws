@@ -45,18 +45,20 @@ ssm = aws.client("ssm")
 
 ### Secrets
 
-A `SecretStore` is a namespaced view of SSM Parameter Store. Reads check the
-environment first, so a shell export or test fixture overrides without touching
-AWS. The prefix is required — a shared default would let unrelated projects
-collide in one namespace.
+A `SecretStore` is a layered view of SSM Parameter Store, built from a search
+path of prefixes — most specific first, like project/user/system config files.
+Reads check the environment, then each prefix in order; writes and deletes
+target the first prefix only, so a project stores what is its own and inherits
+the rest from shared layers. The path is required — a shared default would let
+unrelated projects collide in one namespace.
 
 ```python
 from pdum.aws.secrets import SecretStore
 
-store = SecretStore("/myapp/")
-store.put("STRIPE_KEY", "sk_live_...")
-store.get("STRIPE_KEY", required=True)
-store.names()
+store = SecretStore("/myapp/:/org/")
+store.put("STRIPE_KEY", "sk_live_...")   # written to /myapp/STRIPE_KEY
+store.get("GOOGLE_CLIENT_ID")            # falls back to /org/GOOGLE_CLIENT_ID
+store.names()                            # union across layers, deduplicated
 ```
 
 ### Service quotas
@@ -92,10 +94,11 @@ AWS_PROFILE=my-account pdum-aws whoami
 
 ### Secrets
 
-The prefix has no default. Pass `--prefix` or set `PDUM_SSM_PREFIX` once.
+The search path has no default. Pass `--path` or set `PDUM_SSM_PATH` once —
+one or more prefixes, colon-separated, most specific first.
 
 ```bash
-export PDUM_SSM_PREFIX=/myapp/
+export PDUM_SSM_PATH=/myapp/:/org/
 
 pdum-aws secrets list                  # names only
 pdum-aws secrets list --long           # type, version, last modified
@@ -106,10 +109,13 @@ pdum-aws secrets import .secrets --dry-run
 pdum-aws secrets export
 ```
 
-`set` reads stdin when the value is omitted or given as `-`; prefer that, since
-a value passed as an argument lands in your shell history. `import` refuses to
-push AWS bootstrap keys (`AWS_ACCESS_KEY_ID`, `AWS_PROFILE`, …) — storing the
-credentials you need in order to reach the store would be circular.
+Reads fall back along the path; `set`, `rm` and `import` touch only the first
+prefix, and `rm` refuses a name living solely in a fallback layer rather than
+reaching down (`list --long` shows each secret's origin). `set` reads stdin
+when the value is omitted or given as `-`; prefer that, since a value passed as
+an argument lands in your shell history. `import` refuses to push AWS bootstrap
+keys (`AWS_ACCESS_KEY_ID`, `AWS_PROFILE`, …) — storing the credentials you need
+in order to reach the store would be circular.
 
 ### Quotas
 
@@ -138,7 +144,7 @@ shows the applied value, which is the number that matters.
 Each group is produced by a factory, so another application can mount the same
 commands under its own name — carrying its own defaults, rendering through its
 own console. That is how you give an app a `secrets` subcommand without asking
-its users to type a prefix:
+its users to type a search path:
 
 ```python
 import typer
@@ -151,7 +157,7 @@ console = Console()
 app = typer.Typer(help="acme — the whole product.", no_args_is_help=True)
 add_whoami(app, console=console)
 app.add_typer(
-    build_secrets_app(console=console, default_prefix="/acme/", envvar="ACME_SSM_PREFIX"),
+    build_secrets_app(console=console, default_path="/acme/:/org/", envvar="ACME_SSM_PATH"),
     name="secrets",
 )
 app.add_typer(
@@ -166,12 +172,12 @@ def main() -> None:
 ```
 
 `acme secrets list` now works bare, and `acme secrets --help` shows
-`[default: /acme/]` and `[env var: ACME_SSM_PREFIX]` rather than this library's.
-The prefix resolves in order: `--prefix`, then the environment variable named by
-`envvar`, then `default_prefix`, then an error. Pass a zero-argument callable as
-`default_prefix` when the host reads it from a config file and wants that read
-deferred to invocation, or `expose_prefix_option=False` to drop the flag and pin
-the namespace.
+`[default: /acme/:/org/]` and `[env var: ACME_SSM_PATH]` rather than this
+library's. The search path resolves in order: `--path`, then the environment
+variable named by `envvar`, then `default_path`, then an error. Pass a
+zero-argument callable as `default_path` when the host reads it from a config
+file and wants that read deferred to invocation, or `expose_path_option=False`
+to drop the flag and pin the namespace.
 
 `build_quotas_app` takes `default_service`, `default_targets` (a list or a
 callable) and `default_regions` on the same terms, plus `show_service_option` /

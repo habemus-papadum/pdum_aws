@@ -41,7 +41,7 @@ def host():
 @pytest.fixture
 def ssm(monkeypatch):
     """Install an in-memory SSM client; returns a callable that seeds it."""
-    monkeypatch.delenv("PDUM_SSM_PREFIX", raising=False)
+    monkeypatch.delenv("PDUM_SSM_PATH", raising=False)
     monkeypatch.delenv("TOKEN", raising=False)
 
     def install(parameters: dict[str, str]) -> FakeSsmClient:
@@ -59,11 +59,11 @@ def host_app(group: typer.Typer, name: str = "secrets") -> typer.Typer:
     return app
 
 
-class TestSecretsPrefixDefaulting:
+class TestSecretsPathDefaulting:
     def test_a_host_default_makes_the_flag_optional(self, host, ssm):
         console, buffer = host
         ssm({"/acme/TOKEN": "acme-value"})
-        app = host_app(build_secrets_app(console=console, default_prefix="/acme/"))
+        app = host_app(build_secrets_app(console=console, default_path="/acme/"))
 
         result = runner.invoke(app, ["secrets", "get", "TOKEN"])
         assert result.exit_code == 0
@@ -72,22 +72,22 @@ class TestSecretsPrefixDefaulting:
     def test_flag_beats_environment_beats_host_default(self, host, ssm, monkeypatch):
         console, buffer = host
         ssm({"/flag/TOKEN": "from-flag", "/env/TOKEN": "from-env", "/host/TOKEN": "from-host"})
-        app = host_app(build_secrets_app(console=console, default_prefix="/host/"))
+        app = host_app(build_secrets_app(console=console, default_path="/host/"))
 
         assert runner.invoke(app, ["secrets", "get", "TOKEN"]).exit_code == 0
-        monkeypatch.setenv("PDUM_SSM_PREFIX", "/env/")
+        monkeypatch.setenv("PDUM_SSM_PATH", "/env/")
         assert runner.invoke(app, ["secrets", "get", "TOKEN"]).exit_code == 0
-        assert runner.invoke(app, ["secrets", "--prefix", "/flag/", "get", "TOKEN"]).exit_code == 0
+        assert runner.invoke(app, ["secrets", "--path", "/flag/", "get", "TOKEN"]).exit_code == 0
 
         assert plain(buffer.getvalue()).split() == ["from-host", "from-env", "from-flag"]
 
     def test_a_host_can_name_its_own_environment_variable(self, host, ssm, monkeypatch):
         console, buffer = host
         ssm({"/acme/TOKEN": "acme-value", "/other/TOKEN": "wrong-store"})
-        app = host_app(build_secrets_app(console=console, envvar="ACME_SSM_PREFIX"))
+        app = host_app(build_secrets_app(console=console, envvar="ACME_SSM_PATH"))
 
-        monkeypatch.setenv("ACME_SSM_PREFIX", "/acme/")
-        monkeypatch.setenv("PDUM_SSM_PREFIX", "/other/")
+        monkeypatch.setenv("ACME_SSM_PATH", "/acme/")
+        monkeypatch.setenv("PDUM_SSM_PATH", "/other/")
         result = runner.invoke(app, ["secrets", "get", "TOKEN"])
 
         assert result.exit_code == 0
@@ -96,24 +96,24 @@ class TestSecretsPrefixDefaulting:
     def test_environment_lookup_can_be_disabled(self, host, ssm, monkeypatch):
         console, _ = host
         ssm({"/env/TOKEN": "from-env"})
-        app = host_app(build_secrets_app(console=console, envvar=None, default_prefix="/acme/"))
+        app = host_app(build_secrets_app(console=console, envvar=None, default_path="/acme/"))
 
-        monkeypatch.setenv("PDUM_SSM_PREFIX", "/env/")
+        monkeypatch.setenv("PDUM_SSM_PATH", "/env/")
         result = runner.invoke(app, ["secrets", "get", "TOKEN"])
 
         # Resolved to /acme/, where the secret does not exist, rather than /env/.
         assert result.exit_code == 1
 
-    def test_a_pinned_prefix_removes_the_flag(self, host, ssm):
+    def test_a_pinned_path_removes_the_flag(self, host, ssm):
         console, buffer = host
         ssm({"/acme/TOKEN": "acme-value"})
-        app = host_app(build_secrets_app(console=console, default_prefix="/acme/", expose_prefix_option=False))
+        app = host_app(build_secrets_app(console=console, default_path="/acme/", expose_path_option=False))
 
         assert runner.invoke(app, ["secrets", "get", "TOKEN"]).exit_code == 0
         assert plain(buffer.getvalue()).strip() == "acme-value"
 
-        assert "--prefix" not in plain(runner.invoke(app, ["secrets", "--help"]).stdout)
-        assert runner.invoke(app, ["secrets", "--prefix", "/other/", "get", "TOKEN"]).exit_code == 2
+        assert "--path" not in plain(runner.invoke(app, ["secrets", "--help"]).stdout)
+        assert runner.invoke(app, ["secrets", "--path", "/other/", "get", "TOKEN"]).exit_code == 2
 
     def test_a_callable_default_is_resolved_per_invocation(self, host, ssm):
         console, _ = host
@@ -124,7 +124,7 @@ class TestSecretsPrefixDefaulting:
             calls.append(1)
             return "/acme/"
 
-        app = host_app(build_secrets_app(console=console, default_prefix=read_config))
+        app = host_app(build_secrets_app(console=console, default_path=read_config))
         # Deferred: a host reading its config file must not be made to do so at
         # import time, when the app is built.
         assert calls == []
@@ -133,25 +133,25 @@ class TestSecretsPrefixDefaulting:
         assert calls == [1]
 
         # And skipped entirely when the command line already answered.
-        assert runner.invoke(app, ["secrets", "--prefix", "/flag/", "get", "TOKEN"]).exit_code == 0
+        assert runner.invoke(app, ["secrets", "--path", "/flag/", "get", "TOKEN"]).exit_code == 0
         assert calls == [1]
 
-    def test_an_unresolvable_prefix_names_the_environment_variable(self, host, ssm):
+    def test_an_unresolvable_path_names_the_environment_variable(self, host, ssm):
         console, buffer = host
         ssm({})
-        app = host_app(build_secrets_app(console=console, envvar="ACME_SSM_PREFIX", default_prefix=lambda: None))
+        app = host_app(build_secrets_app(console=console, envvar="ACME_SSM_PATH", default_path=lambda: None))
 
         result = runner.invoke(app, ["secrets", "get", "TOKEN"])
 
         assert result.exit_code == 2
-        assert "ACME_SSM_PREFIX" in plain(buffer.getvalue())
+        assert "ACME_SSM_PATH" in plain(buffer.getvalue())
 
     def test_a_root_prefix_is_still_refused(self, host, ssm):
         console, buffer = host
         ssm({})
         app = host_app(build_secrets_app(console=console))
 
-        result = runner.invoke(app, ["secrets", "--prefix", "/", "get", "TOKEN"])
+        result = runner.invoke(app, ["secrets", "--path", "/", "get", "TOKEN"])
 
         assert result.exit_code == 2
         assert "non-root prefix" in plain(buffer.getvalue())
@@ -163,11 +163,11 @@ class TestSecretsHostIntegration:
         ssm({"/acme/TOKEN": "acme-value"})
         built: list[tuple[str, str | None]] = []
 
-        def make_store(prefix: str) -> SecretStore:
-            built.append((prefix, "eu-west-1"))
-            return SecretStore(prefix, region="eu-west-1")
+        def make_store(path: str) -> SecretStore:
+            built.append((path, "eu-west-1"))
+            return SecretStore(path, region="eu-west-1")
 
-        app = host_app(build_secrets_app(console=console, default_prefix="/acme/", store_factory=make_store))
+        app = host_app(build_secrets_app(console=console, default_path="/acme/", store_factory=make_store))
 
         assert runner.invoke(app, ["secrets", "get", "TOKEN"]).exit_code == 0
         assert built == [("/acme/", "eu-west-1")]
@@ -183,7 +183,7 @@ class TestSecretsHostIntegration:
         """
         console, buffer = host
         ssm({"/acme/TOKEN": "acme-value"})
-        group = build_secrets_app(console=console, default_prefix="/acme/")
+        group = build_secrets_app(console=console, default_path="/acme/")
 
         @group.command("whose")
         def whose(ctx: typer.Context) -> None:
@@ -205,7 +205,7 @@ class TestSecretsHostIntegration:
     def test_the_group_can_be_mounted_under_any_name(self, host, ssm):
         console, buffer = host
         ssm({"/acme/TOKEN": "acme-value"})
-        app = host_app(build_secrets_app(console=console, default_prefix="/acme/"), name="config")
+        app = host_app(build_secrets_app(console=console, default_path="/acme/"), name="config")
 
         result = runner.invoke(app, ["config", "list"])
 
@@ -217,12 +217,55 @@ class TestSecretsHostIntegration:
         console, buffer = host
         ssm({"/acme/TOKEN": "acme-value", "/beta/TOKEN": "beta-value"})
         app = typer.Typer()
-        app.add_typer(build_secrets_app(console=console, default_prefix="/acme/"), name="acme")
-        app.add_typer(build_secrets_app(console=console, default_prefix="/beta/"), name="beta")
+        app.add_typer(build_secrets_app(console=console, default_path="/acme/"), name="acme")
+        app.add_typer(build_secrets_app(console=console, default_path="/beta/"), name="beta")
 
         assert runner.invoke(app, ["acme", "get", "TOKEN"]).exit_code == 0
         assert runner.invoke(app, ["beta", "get", "TOKEN"]).exit_code == 0
         assert plain(buffer.getvalue()).split() == ["acme-value", "beta-value"]
+
+
+class TestSecretsLayering:
+    """A colon-separated search path, driven end-to-end through the CLI."""
+
+    @pytest.fixture
+    def app(self, host, ssm):
+        console, buffer = host
+        self.fake = ssm(
+            {
+                "/acme/OWN": "project-value",
+                "/acme/BOTH": "project-wins",
+                "/org/BOTH": "org-loses",
+                "/org/SHARED": "org-value",
+            }
+        )
+        self.buffer = buffer
+        return host_app(build_secrets_app(console=console, default_path="/acme/:/org/"))
+
+    def test_get_falls_back_along_the_path(self, app, monkeypatch):
+        monkeypatch.delenv("SHARED", raising=False)
+        assert runner.invoke(app, ["secrets", "get", "SHARED"]).exit_code == 0
+        assert plain(self.buffer.getvalue()).strip() == "org-value"
+
+    def test_set_writes_the_first_prefix(self, app):
+        assert runner.invoke(app, ["secrets", "set", "SHARED", "override"]).exit_code == 0
+        assert self.fake.parameters["/acme/SHARED"] == "override"
+        assert self.fake.parameters["/org/SHARED"] == "org-value"
+
+    def test_rm_refuses_to_reach_into_a_fallback_layer(self, app):
+        result = runner.invoke(app, ["secrets", "rm", "SHARED", "--yes"])
+        assert result.exit_code == 1
+        assert "/org/SHARED" in plain(self.buffer.getvalue())
+        assert "/org/SHARED" in self.fake.parameters
+
+    def test_list_dedupes_and_long_shows_origin(self, app):
+        assert runner.invoke(app, ["secrets", "list"]).exit_code == 0
+        assert plain(self.buffer.getvalue()).split() == ["BOTH", "OWN", "SHARED"]
+
+        assert runner.invoke(app, ["secrets", "list", "--long"]).exit_code == 0
+        long_output = plain(self.buffer.getvalue())
+        assert "ORIGIN" in long_output
+        assert "shadowed" in long_output
 
 
 class RecordingQuotasClient(FakeQuotasClient):
