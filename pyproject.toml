@@ -1,6 +1,6 @@
 [project]
 name = "habemus-papadum-aws"
-version = "0.6.0"
+version = "0.7.0-alpha"
 description = "AWS utils"
 readme = "README.md"
 license = { file = "LICENSE" }

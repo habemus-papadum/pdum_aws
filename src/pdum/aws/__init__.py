@@ -35,7 +35,7 @@ load_env()
 from pdum.aws.core import client, resource, session, whoami
 from pdum.aws.env import EnvReport, NoSearchPath, load_env
 
-__version__ = "0.6.0"
+__version__ = "0.7.0-alpha"
 
 __all__ = [
     "EnvReport",
