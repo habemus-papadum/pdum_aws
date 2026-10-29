@@ -19,6 +19,10 @@ To release, ask the operator. When they agree, run the release workflow:
 `gh workflow run release.yml -f bump=minor -f dry_run=false` (run with
 `dry_run=true` first to see the plan). Do not publish from this machine.
 
+Do not update repositories that consume this package; their scheduled refresh
+does that. The one exception: if a change here needs a newer release of another
+`habemus-papadum-*` package, raise that package's floor in this repository.
+
 Do not commit a `path` or `editable` entry in `[tool.uv.sources]`. Do not pin
 another `habemus-papadum-*` package to an exact version without a reason on the
 same line or in `[tool.ship.pins]`. Run `uv run ship deps check` before you
