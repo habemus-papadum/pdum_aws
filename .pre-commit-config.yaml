@@ -32,3 +32,9 @@ repos:
       - id: ruff-format
         name: Format Python with ruff
 
+
+  # ship: rejects development links (path/editable uv sources, link:/file: npm deps) and stale lockfiles.
+  - repo: https://github.com/habemus-papadum/pdum_ship
+    rev: habemus-papadum-ship-v0.1.1
+    hooks:
+      - id: ship-check
