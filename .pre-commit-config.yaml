@@ -33,8 +33,14 @@ repos:
         name: Format Python with ruff
 
 
-  # ship: rejects development links (path/editable uv sources, link:/file: npm deps) and stale lockfiles.
-  - repo: https://github.com/habemus-papadum/pdum_ship
-    rev: habemus-papadum-ship-v0.5.0
+  # ship: rejects development links (path/editable uv sources, link:/file: npm deps),
+  # stale lockfiles and stale skill copies. Runs the ship pinned in uv.lock, so nothing
+  # here changes when ship releases.
+  - repo: local
     hooks:
       - id: ship-check
+        name: ship deps check (development links, lockfiles, skill copies)
+        entry: uv run --locked ship deps check --hook
+        language: system
+        pass_filenames: false
+        always_run: true
