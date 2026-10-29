@@ -528,15 +528,15 @@ dev = [
 
 [[package]]
 name = "habemus-papadum-ship"
-version = "0.3.0"
+version = "0.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pyyaml" },
     { name = "typer" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/37/57/a9c088550264b5939a6f92a7c9b2bb4bac1ae5f4e80cca64f6e7bbd2389d/habemus_papadum_ship-0.3.0.tar.gz", hash = "sha256:bd6eabd41e3a4bf76df95b2bbb1731116566d0950ff5ccd2ba5a7186d5ea26fc", size = 53930, upload-time = "2026-10-29T14:31:30.77Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/a9/99/fac35b9f300081e3403302b4f89dd1a4f249fd513f18165717c1acf6b123/habemus_papadum_ship-0.4.0.tar.gz", hash = "sha256:1281aca74a9a01b6047934fdacbf141f89686e19507d2405e3f8a24a79c21f68", size = 56287, upload-time = "2026-10-29T14:54:42.791Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b7/82/b64b86099aad1dfea56d41a1e774b0150ee4eed5a5ea686a3c639d680f6f/habemus_papadum_ship-0.3.0-py3-none-any.whl", hash = "sha256:43af1e2f51a36deb1daa939422a0187ed23ddfabb5dba44d22efb24f13867705", size = 40153, upload-time = "2026-10-29T14:31:29.702Z" },
+    { url = "https://files.pythonhosted.org/packages/36/34/284da8f38b681173cb5552572120161885e586b6d270b777474595cc6549/habemus_papadum_ship-0.4.0-py3-none-any.whl", hash = "sha256:cd6950a100eeec214079d074f80266e88ca124830e4cadcd52c300e253709332", size = 42386, upload-time = "2026-10-29T14:54:41.7Z" },
 ]
 
 [[package]]
