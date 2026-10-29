@@ -35,6 +35,6 @@ repos:
 
   # ship: rejects development links (path/editable uv sources, link:/file: npm deps) and stale lockfiles.
   - repo: https://github.com/habemus-papadum/pdum_ship
-    rev: habemus-papadum-ship-v0.3.0
+    rev: habemus-papadum-ship-v0.4.0
     hooks:
       - id: ship-check
