@@ -46,7 +46,8 @@ ours = ["@scope/*", "my-org-*"]
 
 # Paths outside a package directory whose changes count as a change to every
 # package (for `ship changed`). Lockfiles are not listed: every refresh and
-# every release touches them.
+# every release touches them. For a package at the repository root the
+# whole tree is already its directory, so this setting adds nothing there.
 shared-paths = [".github/workflows/**", "pnpm-workspace.yaml"]
 
 # Paths whose changes never count. Optional.
@@ -195,42 +196,25 @@ installs ship into its own environment at that pinned release.
 
 ## Releasing from GitHub Actions
 
-The reusable workflow runs `ship release` as the repository's CI identity,
-after the commit's CI has passed. A repository calls it from its own
-`release.yml`:
+The reusable workflow `.github/workflows/release.yml` runs `ship release` as
+the repository's CI identity, after the commit's CI has passed. A repository
+calls it from its own `release.yml`; the one canonical caller, with every
+input, is in
+[`docs/conventions.md`](conventions.md#the-release-workflow-caller).
+Copy it from there rather than from another repository.
 
-```yaml
-name: release
-on:
-  workflow_dispatch:
-    inputs:
-      package: { description: Package to release, required: true, type: string }
-      bump: { description: patch, minor or major, type: choice, options: [patch, minor, major], default: minor }
-      dry_run: { description: Plan only, type: boolean, default: true }
-jobs:
-  release:
-    uses: habemus-papadum/pdum_ship/.github/workflows/release.yml@main
-    with:
-      package: ${{ inputs.package }}
-      bump: ${{ inputs.bump }}
-      dry_run: ${{ inputs.dry_run }}
-    secrets:
-      PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
-      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-    permissions:
-      contents: write
-      actions: read
-```
-
-The workflow waits for the `ci.yml` run on the same commit to succeed (input
-`ci_workflow` renames it; `skip_ci_check` overrides it), sets the git identity,
-installs the repository with `uv sync --locked`, exports the tokens, and runs
+The caller must grant `contents: write`, `actions: read` and
+`id-token: write`: the reusable job requests all three, and a caller that
+grants less fails as `startup_failure` with no log. The workflow waits for
+the `ci.yml` run on the same commit to succeed (input `ci_workflow` renames
+it; `skip_ci_check` overrides it), sets the git identity, installs the
+repository with `uv sync --locked`, exports the tokens, and runs
 `uv run ship release`. For a pnpm workspace it installs pnpm and Node — the
 version in `.nvmrc` when the repository has one, otherwise the
 `node_version` input — and lets `actions/setup-node` write the `.npmrc` that
-reads `NODE_AUTH_TOKEN`. The full caller, with the `skip_ci_check` and
-`skip_tests` inputs, is in [`docs/conventions.md`](conventions.md#the-release-workflow-caller). Publishing authenticates with the tokens; switching a
-repository to trusted publishing changes only that step.
+reads `NODE_AUTH_TOKEN`; `pnpm publish` runs with `--provenance`. Publishing
+authenticates with the tokens; switching a repository to trusted publishing
+changes only that step.
 
 ## Why peer dependencies matter for npm libraries
 
