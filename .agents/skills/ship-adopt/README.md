@@ -94,7 +94,9 @@ component is the unscoped name (`@scope/core` tags as `core-v1.2.0`).
 In order:
 
 1. Preflight: clean working tree, on the release branch, `HEAD` equal to the
-   remote branch, no development links, lockfiles current.
+   remote branch, no development links, lockfiles current. Tags are fetched
+   from the remote first (as `ship deps check` also does): a release made
+   elsewhere leaves a tag that `git pull` does not bring in.
 2. Read the package's last tag; require the manifest to say
    `<last>+dev`; compute the next version; ask the registry that it does not
    exist yet (`--no-registry-check` skips the question).
@@ -170,16 +172,26 @@ Reports, and exits 1 on any of:
   `workspace:>=X.Y.0`);
 - a manifest version that is not `<last tag>+dev`.
 
-`--hook` runs only the first two, fast enough for a pre-commit hook:
+`--hook` runs the first two plus the skill-copy check, fast enough for a
+pre-commit hook. The repository already installs ship through its lockfile,
+so the hook runs that copy and nothing needs bumping when ship releases:
 
 ```yaml
 # .pre-commit-config.yaml
 repos:
-  - repo: https://github.com/habemus-papadum/pdum_ship
-    rev: habemus-papadum-ship-v0.1.0
+  - repo: local
     hooks:
       - id: ship-check
+        name: ship deps check (development links, lockfiles, skill copies)
+        entry: uv run --locked ship deps check --hook
+        language: system
+        pass_filenames: false
+        always_run: true
 ```
+
+The remote form (`repo: https://github.com/habemus-papadum/pdum_ship` with a
+`rev:` of a release tag and hook id `ship-check`) also works; pre-commit then
+installs ship into its own environment at that pinned release.
 
 ## Releasing from GitHub Actions
 
