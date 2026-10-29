@@ -1,6 +1,6 @@
 [project]
 name = "habemus-papadum-aws"
-version = "0.7.0-alpha"
+version = "0.6.0+dev"
 description = "AWS utils"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -44,7 +44,6 @@ packages = ["src/pdum"]
 
 [dependency-groups]
 dev = [
-    "hatch>=1.14.2",
     "pytest>=8.0.0",
     "pytest-cov>=7.0.0",
     "ruff>=0.13.3",
@@ -55,9 +54,9 @@ dev = [
     "mkdocs-jupyter>=0.25.1",
     "jupyter>=1.1.1",
     "rich>=13.7.1",
-    "inquirerpy>=0.3.4",
     "pre-commit>=3.7.0",
     "watchdog>=3.0.0",
+    "habemus-papadum-ship>=0.1.0",
 ]
 
 [tool.ruff]
@@ -83,3 +82,9 @@ omit = [
     "*/tests/*",
     "*/testing.py",
 ]
+
+# ship releases this package: one version per package, the tag is the truth,
+# the manifest carries <last release>+dev between releases. See the README.
+[tool.ship]
+ours = ["habemus-papadum-*", "@habemus-papadum/*"]
+shared-paths = [".github/workflows/**"]

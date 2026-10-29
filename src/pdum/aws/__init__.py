@@ -32,10 +32,12 @@ load_env()
 ```
 """
 
+from importlib.metadata import version as _dist_version
+
 from pdum.aws.core import client, resource, session, whoami
 from pdum.aws.env import EnvReport, NoSearchPath, load_env
 
-__version__ = "0.7.0-alpha"
+__version__ = _dist_version("habemus-papadum-aws")
 
 __all__ = [
     "EnvReport",
