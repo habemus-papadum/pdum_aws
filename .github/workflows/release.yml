@@ -28,3 +28,4 @@ jobs:
     permissions:
       contents: write
       actions: read
+      id-token: write   # the reusable job requests it; a caller granting less fails at startup
