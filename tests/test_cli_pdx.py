@@ -24,9 +24,7 @@ from pdum.aws.env import load_env_files, load_secrets, resolve_search_path
 from pdum.aws.secrets import SecretStore
 from tests.fakes import FakeSsmClient
 
-# A wide console: rich wraps table cells to the terminal width, and on CI runners the
-# long temporary paths otherwise split strings such as ".env + .env.local" across lines.
-runner = CliRunner(env={"COLUMNS": "200"})
+runner = CliRunner()
 
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
