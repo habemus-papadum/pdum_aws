@@ -56,7 +56,7 @@ dev = [
     "rich>=13.7.1",
     "pre-commit>=3.7.0",
     "watchdog>=3.0.0",
-    "habemus-papadum-ship>=0.12.0",
+    "habemus-papadum-ship>=0.12.1",
 ]
 
 [tool.ruff]
