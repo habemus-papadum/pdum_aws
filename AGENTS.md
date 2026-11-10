@@ -175,3 +175,12 @@ which calls the reusable workflow in `habemus-papadum/pdum_ship`. It waits for
 6. Writes `<version>+dev` back and pushes
 
 Versions follow `X.Y.Z+dev` → `X.Y.Z` (tagged) → `X.Y.Z+dev`.
+
+## Weekly dependency maintenance
+
+The scheduled/manual `deps-refresh.yml` workflow uses Ship's shared refresh action.
+`[tool.ship] refresh-test` owns its explicit maintenance checks; release tests keep
+their existing scope. See [dependency maintenance](docs/dependency-maintenance.md)
+for commands, outcomes and verification limits. No package release or deployment
+is part of a dependency refresh. Keep generated reports out of Git and preserve
+human/agent edits on an existing repair PR.

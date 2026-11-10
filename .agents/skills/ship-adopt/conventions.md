@@ -19,8 +19,9 @@ everywhere and CI needs one setup step for it.
   tag series per package: `<package>-v<version>`. Between releases the
   manifest says `<last release>+dev`.
 - A `release.yml` with a `workflow_dispatch` trigger that calls
-  `habemus-papadum/pdum_ship/.github/workflows/release.yml@main`. No other
-  way to publish is documented.
+  `habemus-papadum/pdum_ship/.github/workflows/release.yml@main`, or the shared
+  composite release action after its own authentication setup. Publication
+  stays in the same CLI and shared release steps.
 - Dependencies on the maintainers' own packages declared as floors
   (`name>=X.Y`, `"@scope/name": ">=X.Y.0"`; inside a pnpm workspace,
   `workspace:>=X.Y.0`). `~=X.Y.0`, `^X.Y.0` and `~X.Y.0` are caps, not
@@ -50,6 +51,30 @@ everywhere and CI needs one setup step for it.
   `0.0.0+dev`.
 - `__version__`, if exported, read from the installed metadata:
   `importlib.metadata.version("<distribution>")`.
+
+## Dependency-only and mixed repositories
+
+Choose release participation before applying the release procedures below.
+`[tool.ship] versioning = false` keeps dependency policy, lock refresh and tests
+without version changes, tags or uploads. Keep Python projects installable;
+never set `package = false` just to remove a real library from Ship releases.
+A mixed repository sets `versioning = true` only under the published libraries'
+`[tool.ship.packages."NAME"]` tables. The inverse per-package override also works.
+`publish = false` still means a versioned/tagged package without an upload.
+
+For internal projects, add Ship, its tests, policy CI, hook and synced skills.
+Do not reconstruct baseline tags, rewrite their versions to `+dev`, add a release
+workflow or publish a package merely to demonstrate adoption. Run the ordinary
+project checks and `ship deps check`; use a refresh dry run to inspect dependency
+update selection. Apply the remaining release steps only to versioned libraries.
+Independent experiment environments outside the configured workspaces stay separate.
+
+Intentional npm local dependencies can have exact, reasoned
+`[[tool.ship.local-dependencies]]` entries; see the README's **Internal projects
+and local dependencies** section. Preserve the repository's explicit vendor
+restoration process and test it in a fresh checkout. An exception changes source
+policy only; a package configured to publish still cannot ship local runtime
+references in its packed metadata. Python path/editable links remain disallowed.
 
 ## Adopting ship in a uv repository
 
@@ -383,7 +408,51 @@ attestation (the repository, commit and workflow run that built the
 package, shown on npmjs.com); publishing still authenticates with the
 token. A Python-only repository grants it too and simply does not use it.
 The reusable workflow also takes `ci_workflow` (default `ci.yml`) and
-`uv_version`.
+`uv_version`. Private registry credential inputs and native registry selection
+are documented in the README’s **Private registries** section.
+
+Consecutive releases reuse green CI across version-only commits; source,
+dependency and configuration changes still require fresh CI. Do not add
+`skip_ci_check` to work around ship's release commits. Dispatch packages one
+at a time after the previous run finishes; the input is a single package name.
+See the README's release-workflow section for the exact reuse rule.
+
+## A caller with native authentication setup
+
+A job that uses an existing OIDC/login action must run that action in the same
+job as publication; saved native credentials cannot be carried through a
+reusable-workflow job boundary. Use the shared composite action after setup:
+
+```yaml
+permissions:
+  contents: write
+  actions: read
+  id-token: write
+concurrency:
+  group: ship-release
+  cancel-in-progress: false
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      # Set up uv and the repository's Node/pnpm versions here, followed by
+      # the existing authentication action. It owns native registry credentials.
+      - uses: habemus-papadum/pdum_ship/.github/actions/release@<full-commit-sha>
+        with:
+          package: ${{ inputs.package }}
+          bump: ${{ inputs.bump }}
+          dry_run: ${{ inputs.dry_run }}
+```
+
+The action also accepts `ci_workflow`, `skip_ci_check` and `skip_tests`, with the
+same defaults as the reusable workflow. It requires uv, and pnpm when the repo
+has a pnpm lockfile. The action reads `[tool.ship] pnpm-root` itself. Do not add
+registry secrets, duplicate the gate or copy the release shell into the caller
+when its native authentication setup already supplies access.
 
 ## The CI snippet
 
@@ -579,8 +648,9 @@ no longer apply.
 Put this, adapted to the repository's instruction style, where agents will
 read it:
 
-> `ship` (habemus-papadum-ship) releases this repository's packages. Each
-> package has its own version and tag; between releases the manifest says
+> `ship` (habemus-papadum-ship) manages this repository's dependencies and
+> selected package releases. Projects with `versioning = false` retain their
+> versions and are never released. Each versioned package has its own version and tag; between releases the manifest says
 > `<last release>+dev`. Never edit a version field by hand. To release, ask
 > the operator; when they agree, run the release workflow
 > (`gh workflow run release.yml -f package=<name> -f bump=minor -f dry_run=false`,
@@ -592,5 +662,62 @@ read it:
 > packages, raise that package's floor here. Do not pin one of our packages
 > to an exact version without a reason on the same line or in
 > `[tool.ship.pins]`. Never commit a `path` or `editable` entry in
-> `[tool.uv.sources]`, or a `link:`/`file:` dependency (`pnpm link` writes
-> one). Run `uv run ship deps check` before you finish.
+> `[tool.uv.sources]`, or an unapproved npm `link:`/`file:` dependency. An
+> intentional npm local dependency needs an exact, reasoned
+> `[[tool.ship.local-dependencies]]` exception. Published runtime metadata
+> must not retain local references. Run `uv run ship deps check` before you finish.
+
+
+## Weekly dependency workflow
+
+After adoption, give each maintained workspace one lockfile refresh job. Select
+`[tool.ship] refresh-test` deliberately when experimental projects must not gate
+maintenance; this is separate from package-specific release tests. Use a non-empty
+list with real checks. Existing native registry login and toolchain preparation
+precede this shared action; no publication credentials belong in its arguments.
+
+```yaml
+name: weekly dependencies
+on:
+  schedule:
+    - cron: '17 5 * * 1'  # stagger across repositories
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ship-release
+  cancel-in-progress: false
+jobs:
+  refresh:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+      # Add id-token: write only when the repository's native auth needs OIDC.
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: '0.12.17'
+      # Set up pnpm/Node if used; prepare the existing native registry login here.
+      - uses: habemus-papadum/pdum_ship/.github/actions/refresh@<reviewed-revision>
+        with:
+          ci_workflow: ci.yml
+```
+
+The selected CI workflow must support manual dispatch. Configure repository/owner
+policy to permit Actions-created PRs; if prohibited, the failed candidate remains
+available in its branch and artifact and the job stays red. Do not weaken that
+signal or use a human token for Git pushes as an implicit deployment trigger.
+
+The action commits passing locks and generated Ship skill copies; first-party
+manifest floors do not move. It preserves failed resolved candidates in a draft
+PR and restores ordinary local refresh inputs. Baseline/resolution failures without
+a candidate are diagnostic failures only. Existing candidate PRs/branches freeze
+new updates until reviewed, so an agent's repairs are never overwritten. The
+[README](README.md#weekly-dependency-integration) owns the full behavior.

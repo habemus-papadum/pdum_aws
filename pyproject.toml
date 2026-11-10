@@ -56,7 +56,7 @@ dev = [
     "rich>=13.7.1",
     "pre-commit>=3.7.0",
     "watchdog>=3.0.0",
-    "habemus-papadum-ship>=0.1.0",
+    "habemus-papadum-ship>=0.12.0",
 ]
 
 [tool.ruff]
@@ -86,5 +86,6 @@ omit = [
 # ship releases this package: one version per package, the tag is the truth,
 # the manifest carries <last release>+dev between releases. See the README.
 [tool.ship]
+refresh-test = ["uv run --locked pytest -q"]
 ours = ["habemus-papadum-*", "@habemus-papadum/*"]
 shared-paths = [".github/workflows/**"]
